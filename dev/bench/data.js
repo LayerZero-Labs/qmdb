@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1736529827836,
+  "lastUpdate": 1736531176436,
   "repoUrl": "https://github.com/LayerZero-Labs/qmdb",
   "entries": {
     "Benchmark": [
@@ -117,6 +117,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "Block Population Throughput",
             "value": 32.124818024952695,
+            "unit": "ops/s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dwong@layerzerolabs.org",
+            "name": "danielwlz",
+            "username": "danielwlz"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "882d226bf3e014922b18e9d84e0945b3a22197f5",
+          "message": "Remove license badge\n\nSince it only shows one anyway",
+          "timestamp": "2025-01-11T01:43:46+08:00",
+          "tree_id": "0d31aa9fc24bfcc9964ad8018977cb33de532492",
+          "url": "https://github.com/LayerZero-Labs/qmdb/commit/882d226bf3e014922b18e9d84e0945b3a22197f5"
+        },
+        "date": 1736531175530,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "Reads Throughput",
+            "value": 398505.93589136977,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Deletes Throughput",
+            "value": 1304660.7688258928,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Inserts Throughput",
+            "value": 933265.1402717105,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Transactions Throughput",
+            "value": 159727.87481423648,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Reads Latency",
+            "value": 31,
+            "unit": "ns"
+          },
+          {
+            "name": "Block Population Throughput",
+            "value": 87.57442402958124,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Updates Throughput",
+            "value": 353752.4106546462,
             "unit": "ops/s"
           }
         ]
