@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1736544829963,
+  "lastUpdate": 1736568773703,
   "repoUrl": "https://github.com/LayerZero-Labs/qmdb",
   "entries": {
     "Benchmark": [
@@ -235,6 +235,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "Deletes Throughput",
             "value": 1403677.469335718,
+            "unit": "ops/s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dwong@layerzerolabs.org",
+            "name": "danielwlz",
+            "username": "danielwlz"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "df8ee97f363375e499726bd3efd5fca9cd4bf83f",
+          "message": "Fix Cargo edition",
+          "timestamp": "2025-01-11T12:04:57+08:00",
+          "tree_id": "79ad67abe172af0fa1746dd2fc0781c8376872bb",
+          "url": "https://github.com/LayerZero-Labs/qmdb/commit/df8ee97f363375e499726bd3efd5fca9cd4bf83f"
+        },
+        "date": 1736568772890,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "Reads Latency",
+            "value": 32,
+            "unit": "ns"
+          },
+          {
+            "name": "Block Population Throughput",
+            "value": 96.8157774863623,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Reads Throughput",
+            "value": 393511.0252305654,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Inserts Throughput",
+            "value": 595389.3489406158,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Deletes Throughput",
+            "value": 1459283.0195215733,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Updates Throughput",
+            "value": 447936.42742882273,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Transactions Throughput",
+            "value": 170731.58072585234,
             "unit": "ops/s"
           }
         ]
