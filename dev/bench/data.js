@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1736568773703,
+  "lastUpdate": 1736696340732,
   "repoUrl": "https://github.com/LayerZero-Labs/qmdb",
   "entries": {
     "Benchmark": [
@@ -295,6 +295,65 @@ window.BENCHMARK_DATA = {
             "name": "Transactions Throughput",
             "value": 170731.58072585234,
             "unit": "ops/s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "kelvin.wong@layerzerolabs.org",
+            "name": "absolute0kelvin",
+            "username": "absolute0kelvin"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "54717cd6e134d30de7e30e26f2b1a329c1df2052",
+          "message": "disable measure_read_latency\n\nwe need to refine it later",
+          "timestamp": "2025-01-12T23:31:06+08:00",
+          "tree_id": "6ea4e214d868df1922892ce7e4dcc80a41b272f1",
+          "url": "https://github.com/LayerZero-Labs/qmdb/commit/54717cd6e134d30de7e30e26f2b1a329c1df2052"
+        },
+        "date": 1736696340451,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "Block Population Throughput",
+            "value": 100.12207885074271,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Reads Throughput",
+            "value": 437949.11983328924,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Inserts Throughput",
+            "value": 860341.9255193908,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Transactions Throughput",
+            "value": 152365.4244577711,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Deletes Throughput",
+            "value": 780149.8363577207,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Updates Throughput",
+            "value": 370548.7566590344,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Reads Latency",
+            "value": 0,
+            "unit": "ns"
           }
         ]
       }
