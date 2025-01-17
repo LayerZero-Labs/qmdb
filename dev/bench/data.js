@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1736866453752,
+  "lastUpdate": 1737107435946,
   "repoUrl": "https://github.com/LayerZero-Labs/qmdb",
   "entries": {
     "Benchmark": [
@@ -412,6 +412,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "Updates Throughput",
             "value": 300857.7888796174,
+            "unit": "ops/s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "kelvin.wong@layerzerolabs.org",
+            "name": "absolute0kelvin",
+            "username": "absolute0kelvin"
+          },
+          "committer": {
+            "email": "kelvin.wong@layerzerolabs.org",
+            "name": "absolute0kelvin",
+            "username": "absolute0kelvin"
+          },
+          "distinct": true,
+          "id": "34aa582e3c52ee8355cf29609a92f1388479447b",
+          "message": "add upper bound check for tps_blocks",
+          "timestamp": "2025-01-17T17:41:42+08:00",
+          "tree_id": "88c0791975e0576832045ace63f1a4ea8fd1f59a",
+          "url": "https://github.com/LayerZero-Labs/qmdb/commit/34aa582e3c52ee8355cf29609a92f1388479447b"
+        },
+        "date": 1737107435494,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "Reads Throughput",
+            "value": 973184.9210757734,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Updates Throughput",
+            "value": 273106.0842731856,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Inserts Throughput",
+            "value": 395269.80935362366,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Deletes Throughput",
+            "value": 2276840.747762771,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Block Population Throughput",
+            "value": 87.40946237149389,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Reads Latency",
+            "value": 0,
+            "unit": "ns"
+          },
+          {
+            "name": "Transactions Throughput",
+            "value": 148363.88021990494,
             "unit": "ops/s"
           }
         ]
