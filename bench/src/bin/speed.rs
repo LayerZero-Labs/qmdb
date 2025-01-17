@@ -63,6 +63,14 @@ fn main() {
         );
     }
     let blocks_for_db_population = args.entry_count / args.ops_per_block;
+    if blocks_for_db_population < args.tps_blocks {
+        panic!(
+            "blocks_for_db_population ({}/{}={}) cannot be less than tps_blocks ({}). Please make entry_count larger",
+            args.entry_count, args.ops_per_block,
+            blocks_for_db_population, args.tps_blocks
+        );
+    }
+    println!("blocks_for_db_population: {}", blocks_for_db_population);
 
     println!("Workload configuration:");
     println!(
