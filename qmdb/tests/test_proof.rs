@@ -1,12 +1,19 @@
+use std::{sync::Arc, thread};
+
+use parking_lot::RwLock;
 use qmdb::{
-    def::{ENTRY_BASE_LENGTH, TWIG_MASK},
+    config::Config,
+    def::{ENTRY_BASE_LENGTH, IN_BLOCK_IDX_BITS, TWIG_MASK},
     entryfile::entry,
     merkletree::{
         check,
         helpers::build_test_tree,
-        proof::{self, ProofPath},
+        proof::{self, check_proof, ProofPath},
     },
+    seqads::task::{SingleCsTask, TaskBuilder},
+    tasks::TasksManager,
     test_helper::TempDir,
+    AdsCore, AdsWrap, ADS,
 };
 
 fn check_equal(pp: &ProofPath, other: &ProofPath) -> String {
@@ -71,7 +78,7 @@ fn test_tree_proof() {
 
     let max_sn = TWIG_MASK as i32 * 4 + 1600;
     for i in 0..max_sn {
-        let mut proof_path = tree.get_proof(i as u64);
+        let mut proof_path = tree.get_proof(i as u64).unwrap();
         proof_path.check(false).unwrap();
 
         let bz = proof_path.to_bytes();
@@ -86,7 +93,7 @@ fn test_tree_proof() {
     let mut bz = [0u8; ENTRY_BASE_LENGTH + 8];
     let null_hash = entry::null_entry(&mut bz[..]).hash();
     for i in max_sn.._max_sn {
-        let mut proof_path = tree.get_proof(i as u64);
+        let mut proof_path = tree.get_proof(i as u64).unwrap();
         assert_eq!(proof_path.left_of_twig[0].self_hash, null_hash);
         proof_path.check(false).unwrap();
 
@@ -96,4 +103,85 @@ fn test_tree_proof() {
         assert_eq!(r, String::from(""));
         path2.check(true).unwrap();
     }
+}
+
+#[test]
+fn test_tree_get_proof() {
+    let ads_dir = "./test_tree_get_proof";
+    let _tmp_dir = TempDir::new(ads_dir);
+
+    let mut config = Config::from_dir(ads_dir);
+    AdsCore::init_dir(&config);
+    config.set_with_twig_file(true);
+
+    let mut ads = Box::new(AdsWrap::new(&config));
+    let ads_p = &mut *ads as *mut AdsWrap<SingleCsTask>;
+
+    let handle = thread::spawn(move || {
+        let mut proof = ads.get_proof(5, 4096).unwrap();
+        assert_eq!(
+            proof.left_of_twig[0].self_hash,
+            [
+                93, 178, 212, 56, 37, 103, 172, 205, 255, 184, 39, 231, 94, 228, 14, 210, 209, 165,
+                122, 253, 187, 100, 5, 13, 55, 169, 246, 181, 247, 201, 159, 152
+            ]
+        );
+        check_proof(&mut proof).unwrap();
+    });
+
+    unsafe {
+        let ads = &mut (*ads_p);
+        let task_id = 1 << IN_BLOCK_IDX_BITS;
+        ads.start_block(
+            1,
+            Arc::new(TasksManager::new(
+                vec![RwLock::new(Some(
+                    TaskBuilder::new().create(b"k12", b"v1").build(),
+                ))],
+                task_id,
+            )),
+        );
+        let shared_ads = ads.get_shared();
+        shared_ads.insert_extra_data(1, "".to_owned());
+        shared_ads.add_task(task_id);
+    }
+    handle.join().unwrap();
+}
+
+#[test]
+fn test_tree_get_proof_err() {
+    let ads_dir = "./test_tree_get_proof_err";
+    let _tmp_dir = TempDir::new(ads_dir);
+
+    let config = Config::from_dir(ads_dir);
+    AdsCore::init_dir(&config);
+
+    let mut ads = Box::new(AdsWrap::new(&config));
+    let ads_p = &mut *ads as *mut AdsWrap<SingleCsTask>;
+
+    let handle = thread::spawn(move || {
+        let proof = ads.get_proof(5, 4095);
+        assert!(proof.is_err());
+        if let Err(e) = proof {
+            assert_eq!(e, format!("get proof failed: \"twig_file is empty\""));
+        }
+    });
+
+    unsafe {
+        let ads = &mut (*ads_p);
+        let task_id = 1 << IN_BLOCK_IDX_BITS;
+        ads.start_block(
+            1,
+            Arc::new(TasksManager::new(
+                vec![RwLock::new(Some(
+                    TaskBuilder::new().create(b"k12", b"v1").build(),
+                ))],
+                task_id,
+            )),
+        );
+        let shared_ads = ads.get_shared();
+        shared_ads.insert_extra_data(1, "".to_owned());
+        shared_ads.add_task(task_id);
+    }
+    handle.join().unwrap();
 }

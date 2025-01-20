@@ -17,6 +17,7 @@ pub const DEFAULT_ENTRY_SIZE: usize = 300;
 pub const SENTRY_COUNT: usize = (1 << 16) / SHARD_COUNT;
 
 pub const PRUNE_EVERY_NBLOCKS: i64 = 500;
+pub const MAX_PROOF_REQ: usize = 1000;
 
 pub const JOB_COUNT: usize = 2000;
 pub const SUB_JOB_RESERVE_COUNT: usize = 50;

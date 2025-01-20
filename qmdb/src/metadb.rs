@@ -15,20 +15,20 @@ use std::{
     os::unix::fs::FileExt,
 };
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct MetaInfo {
-    curr_height: i64,
-    last_pruned_twig: [(u64, i64); SHARD_COUNT],
-    next_serial_num: [u64; SHARD_COUNT],
-    oldest_active_sn: [u64; SHARD_COUNT],
-    oldest_active_file_pos: [i64; SHARD_COUNT],
-    root_hash: [[u8; 32]; SHARD_COUNT],
-    root_hash_by_height: Vec<[u8; 32]>,
-    edge_nodes: [Vec<u8>; SHARD_COUNT],
-    twig_file_sizes: [i64; SHARD_COUNT],
-    entry_file_sizes: [i64; SHARD_COUNT],
-    first_twig_at_height: [(u64, i64); SHARD_COUNT],
-    extra_data: String,
+    pub curr_height: i64,
+    pub last_pruned_twig: [(u64, i64); SHARD_COUNT],
+    pub next_serial_num: [u64; SHARD_COUNT],
+    pub oldest_active_sn: [u64; SHARD_COUNT],
+    pub oldest_active_file_pos: [i64; SHARD_COUNT],
+    pub root_hash: [[u8; 32]; SHARD_COUNT],
+    pub root_hash_by_height: Vec<[u8; 32]>,
+    pub edge_nodes: [Vec<u8>; SHARD_COUNT],
+    pub twig_file_sizes: [i64; SHARD_COUNT],
+    pub entry_file_sizes: [i64; SHARD_COUNT],
+    pub first_twig_at_height: [(u64, i64); SHARD_COUNT],
+    pub extra_data: String,
 }
 
 impl MetaInfo {
@@ -150,7 +150,7 @@ impl MetaDB {
         self.extra_data_map.insert(height, data);
     }
 
-    pub fn commit(&mut self) {
+    pub fn commit(&mut self) -> Arc<MetaInfo> {
         let kv = self.extra_data_map.remove(&self.info.curr_height).unwrap();
         self.info.extra_data = kv.1;
         let name = format!("{}.{}", self.meta_file_name, self.info.curr_height % 2);
@@ -202,6 +202,7 @@ impl MetaDB {
                 self.history_file.write(&data[..]).unwrap();
             }
         }
+        Arc::new(self.info.clone())
     }
 
     pub fn set_curr_height(&mut self, h: i64) {

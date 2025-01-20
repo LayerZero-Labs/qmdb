@@ -1,10 +1,16 @@
-use crate::def::{LEAF_COUNT_IN_TWIG, MIN_PRUNE_COUNT, PRUNE_EVERY_NBLOCKS, TWIG_SHIFT};
+use crate::def::{
+    LEAF_COUNT_IN_TWIG, MAX_PROOF_REQ, MIN_PRUNE_COUNT, PRUNE_EVERY_NBLOCKS, SHARD_COUNT,
+    TWIG_SHIFT,
+};
 use crate::entryfile::{EntryBufferReader, EntryFile};
+use crate::merkletree::proof::ProofPath;
 use crate::merkletree::Tree;
-use crate::metadb::MetaDB;
+#[cfg(feature = "slow_hashing")]
+use crate::merkletree::UpperTree;
+use crate::metadb::{MetaDB, MetaInfo};
 use parking_lot::RwLock;
-use std::sync::mpsc::SyncSender;
-use std::sync::{Arc, Barrier};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+use std::sync::{Arc, Barrier, Condvar, Mutex};
 use std::thread;
 
 type RocksMetaDB = MetaDB;
@@ -23,12 +29,14 @@ impl BarrierSet {
     }
 }
 
+pub type ProofReqElem = Arc<(Mutex<(u64, Option<Result<ProofPath, String>>)>, Condvar)>;
+
 pub struct Flusher {
     shards: Vec<Box<FlusherShard>>,
     meta: Arc<RwLock<RocksMetaDB>>,
     curr_height: i64,
     max_kept_height: i64,
-    end_block_chan: SyncSender<i64>,
+    end_block_chan: SyncSender<Arc<MetaInfo>>,
 }
 
 impl Flusher {
@@ -37,7 +45,7 @@ impl Flusher {
         meta: Arc<RwLock<RocksMetaDB>>,
         curr_height: i64,
         max_kept_height: i64,
-        end_block_chan: SyncSender<i64>,
+        end_block_chan: SyncSender<Arc<MetaInfo>>,
     ) -> Self {
         Self {
             shards,
@@ -46,6 +54,14 @@ impl Flusher {
             max_kept_height,
             end_block_chan,
         }
+    }
+
+    pub fn get_proof_req_senders(&self) -> Vec<SyncSender<ProofReqElem>> {
+        let mut v = Vec::with_capacity(SHARD_COUNT);
+        for i in 0..SHARD_COUNT {
+            v.push(self.shards[i].proof_req_sender.clone());
+        }
+        v
     }
 
     pub fn flush(&mut self, shard_count: usize) {
@@ -82,26 +98,46 @@ pub struct FlusherShard {
     tree: Tree,
     last_compact_done_sn: u64,
     shard_id: usize,
+    proof_req_sender: SyncSender<ProofReqElem>,
+    proof_req_receiver: Receiver<ProofReqElem>,
     #[cfg(feature = "slow_hashing")]
-    upper_tree_sender: SyncSender<crate::merkletree::UpperTree>,
+    upper_tree_sender: SyncSender<UpperTree>,
     #[cfg(feature = "slow_hashing")]
-    upper_tree_receiver: std::sync::mpsc::Receiver<crate::merkletree::UpperTree>,
+    upper_tree_receiver: Receiver<UpperTree>,
 }
 
 impl FlusherShard {
     pub fn new(tree: Tree, oldest_active_sn: u64, shard_id: usize) -> Self {
         #[cfg(feature = "slow_hashing")]
-        let (ut_sender, ut_receiver) = std::sync::mpsc::sync_channel(2);
+        let (ut_sender, ut_receiver) = sync_channel(2);
+        let (pr_sender, pr_receiver) = sync_channel(MAX_PROOF_REQ);
 
         Self {
             buf_read: None,
             tree,
             last_compact_done_sn: oldest_active_sn,
             shard_id,
+            proof_req_sender: pr_sender,
+            proof_req_receiver: pr_receiver,
             #[cfg(feature = "slow_hashing")]
             upper_tree_sender: ut_sender,
             #[cfg(feature = "slow_hashing")]
             upper_tree_receiver: ut_receiver,
+        }
+    }
+
+    pub fn handle_proof_req(&self) {
+        loop {
+            let pair = self.proof_req_receiver.try_recv();
+            if pair.is_err() {
+                break;
+            }
+            let pair = pair.unwrap();
+            let (lock, cvar) = &*pair;
+            let mut sn_proof = lock.lock().unwrap();
+            let proof = self.tree.get_proof(sn_proof.0);
+            sn_proof.1 = Some(proof);
+            cvar.notify_one();
         }
     }
 
@@ -111,7 +147,7 @@ impl FlusherShard {
         curr_height: i64,
         meta: Arc<RwLock<RocksMetaDB>>,
         bar_set: Arc<BarrierSet>,
-        end_block_chan: SyncSender<i64>,
+        end_block_chan: SyncSender<Arc<MetaInfo>>,
     ) {
         let buf_read = self.buf_read.as_mut().unwrap();
         loop {
@@ -172,7 +208,7 @@ impl FlusherShard {
 
             let youngest_twig_id = self.tree.youngest_twig_id;
             let shard_id = self.shard_id;
-            let mut upper_tree = crate::merkletree::UpperTree::empty();
+            let mut upper_tree = UpperTree::empty();
             std::mem::swap(&mut self.tree.upper_tree, &mut upper_tree);
             let upper_tree_sender = self.upper_tree_sender.clone();
             thread::spawn(move || {
@@ -191,6 +227,7 @@ impl FlusherShard {
                     edge_nodes_bytes =
                         upper_tree.prune_nodes(start_twig_id, end_twig_id, youngest_twig_id);
                 }
+
                 //shard#0 must wait other shards to finish
                 if shard_id == 0 {
                     bar_set.metadb_bar.wait();
@@ -218,9 +255,9 @@ impl FlusherShard {
 
                 if shard_id == 0 {
                     meta.set_curr_height(curr_height);
-                    meta.commit();
+                    let meta_info = meta.commit();
                     drop(meta);
-                    match end_block_chan.send(curr_height) {
+                    match end_block_chan.send(meta_info) {
                         Ok(_) => {
                             //println!("{} end block", curr_height);
                         }
@@ -290,6 +327,8 @@ impl FlusherShard {
                     upper_tree.prune_nodes(start_twig_id, end_twig_id, youngest_twig_id);
             }
 
+            self.handle_proof_req();
+
             //shard#0 must wait other shards to finish
             if shard_id == 0 {
                 bar_set.metadb_bar.wait();
@@ -317,9 +356,9 @@ impl FlusherShard {
 
             if shard_id == 0 {
                 meta.set_curr_height(curr_height);
-                meta.commit();
+                let meta_info = meta.commit();
                 drop(meta);
-                match end_block_chan.send(curr_height) {
+                match end_block_chan.send(meta_info) {
                     Ok(_) => {
                         //println!("{} end block", curr_height);
                     }
@@ -468,7 +507,7 @@ mod flusher_tests {
         );
         assert_eq!(recovered_root, root);
         check_hash_consistency(&tree);
-        let mut proof_path = tree.get_proof(SENTRY_COUNT as u64);
+        let mut proof_path = tree.get_proof(SENTRY_COUNT as u64).unwrap();
         check_proof(&mut proof_path).unwrap();
     }
 }

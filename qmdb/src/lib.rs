@@ -23,12 +23,13 @@ pub mod test_helper;
 use aes_gcm::{Aes256Gcm, Key, KeyInit};
 use byteorder::{BigEndian, ByteOrder};
 use entryfile::entrybuffer;
+use merkletree::proof::ProofPath;
 use parking_lot::RwLock;
 use std::collections::VecDeque;
 use std::fs;
 use std::path::Path;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use threadpool::ThreadPool;
 
@@ -38,13 +39,13 @@ use crate::def::{
     TWIG_SHIFT,
 };
 use crate::entryfile::{entry::sentry_entry, EntryBz, EntryCache, EntryFile};
-use crate::flusher::{Flusher, FlusherShard};
+use crate::flusher::{Flusher, FlusherShard, ProofReqElem};
 use crate::indexer::Indexer;
 use crate::merkletree::{
     recover::{bytes_to_edge_nodes, recover_tree},
     Tree,
 };
-use crate::metadb::MetaDB;
+use crate::metadb::{MetaDB, MetaInfo};
 use log::{debug, error, info};
 
 #[cfg(all(target_os = "linux", feature = "directio"))]
@@ -65,6 +66,7 @@ pub struct AdsCore {
     entry_files: Vec<Arc<EntryFile>>,
     meta: Arc<RwLock<MetaDB>>,
     wrbuf_size: usize,
+    proof_req_senders: Vec<SyncSender<ProofReqElem>>,
 }
 
 fn get_ciphers(
@@ -112,7 +114,7 @@ impl AdsCore {
     pub fn new(
         task_hub: Arc<dyn TaskHub>,
         config: &config::Config,
-    ) -> (Self, Receiver<i64>, Flusher) {
+    ) -> (Self, Receiver<Arc<MetaInfo>>, Flusher) {
         #[cfg(feature = "tee_cipher")]
         assert!(config.aes_keys.unwrap().len() == 96);
 
@@ -133,7 +135,7 @@ impl AdsCore {
         file_segment_size: usize,
         with_twig_file: bool,
         aes_keys: &Option<[u8; 96]>,
-    ) -> (Self, Receiver<i64>, Flusher) {
+    ) -> (Self, Receiver<Arc<MetaInfo>>, Flusher) {
         let (ciphers, idx_cipher, meta_db_cipher) = get_ciphers(aes_keys);
         let (data_dir, meta_dir, _indexer_dir) = Self::get_sub_dirs(dir);
 
@@ -185,8 +187,33 @@ impl AdsCore {
             entry_files,
             meta: meta.clone(),
             wrbuf_size,
+            proof_req_senders: flusher.get_proof_req_senders(),
         };
         (ads_core, eb_receiver, flusher)
+    }
+
+    pub fn get_proof(&self, shard_id: usize, sn: u64) -> Result<ProofPath, String> {
+        if cfg!(feature = "slow_hashing") {
+            return Err("do not support proof in slow hashing mode".to_owned());
+        }
+
+        let pair = Arc::new((Mutex::new((sn, Option::None)), Condvar::new()));
+
+        if let Err(er) = self.proof_req_senders[shard_id].send(Arc::clone(&pair)) {
+            return Err(format!("send proof request failed: {:?}", er));
+        }
+
+        // wait for the request to be handled
+        let (lock, cvar) = &*pair;
+        let mut sn_proof = lock.lock().unwrap();
+        while sn_proof.1.is_none() {
+            sn_proof = cvar.wait(sn_proof).unwrap();
+        }
+
+        if let Err(er) = sn_proof.1.as_ref().unwrap() {
+            return Err(format!("get proof failed: {:?}", er));
+        }
+        sn_proof.1.take().unwrap()
     }
 
     pub fn get_entry_files(&self) -> Vec<Arc<EntryFile>> {
@@ -401,7 +428,7 @@ impl AdsCore {
             meta.set_next_serial_num(shard_id, SENTRY_COUNT as u64);
         }
         meta.insert_extra_data(0, "".to_owned());
-        meta.commit()
+        meta.commit();
     }
 
     pub fn check_entry(key_hash: &[u8], key: &[u8], entry_bz: &EntryBz) -> bool {
@@ -598,7 +625,8 @@ pub struct AdsWrap<T: Task> {
     ads: Arc<AdsCore>,
     cache: Arc<EntryCache>,
     cache_list: Vec<Arc<EntryCache>>,
-    end_block_chan: Receiver<i64>, // when ads finish the prev block disk job, there will receive something.
+    // when ads finish the prev block disk job, end_block_chan will receive MetaInfo
+    end_block_chan: Receiver<Arc<MetaInfo>>,
     stop_height: i64,
 }
 
@@ -689,11 +717,18 @@ impl<T: Task + 'static> AdsWrap<T> {
         self.ads.get_entry_files()
     }
 
-    pub fn flush(&mut self) {
+    pub fn get_proof(&self, shard_id: usize, sn: u64) -> Result<ProofPath, String> {
+        self.ads.get_proof(shard_id, sn)
+    }
+
+    pub fn flush(&mut self) -> Vec<Arc<MetaInfo>> {
+        let mut v = Vec::with_capacity(2);
         while self.task_hub.free_slot_count() < 2 {
-            let height = self.end_block_chan.recv().unwrap();
-            self.task_hub.end_block(height);
+            let meta_info = self.end_block_chan.recv().unwrap();
+            self.task_hub.end_block(meta_info.curr_height);
+            v.push(meta_info);
         }
+        v
     }
 
     fn allocate_cache(&mut self) -> Arc<EntryCache> {
@@ -718,21 +753,27 @@ impl<T: Task + 'static> AdsWrap<T> {
         self.stop_height = height;
     }
 
-    pub fn start_block(&mut self, height: i64, tasks_manager: Arc<TasksManager<T>>) -> bool {
+    pub fn start_block(
+        &mut self,
+        height: i64,
+        tasks_manager: Arc<TasksManager<T>>,
+    ) -> (bool, Option<Arc<MetaInfo>>) {
         if height == self.stop_height + 1 {
-            return false;
+            return (false, Option::None);
         }
         self.cache = self.allocate_cache();
 
+        let mut meta_info = Option::None;
         if self.task_hub.free_slot_count() == 0 {
             // adscore and task_hub are busy, wait for them to finish an old block
-            let height = self.end_block_chan.recv().unwrap();
-            self.task_hub.end_block(height);
+            let _meta_info = self.end_block_chan.recv().unwrap();
+            self.task_hub.end_block(_meta_info.curr_height);
+            meta_info = Some(_meta_info);
         }
 
         self.task_hub
             .start_block(height, tasks_manager, self.cache.clone());
-        true
+        (true, meta_info)
     }
 
     pub fn get_shared(&self) -> SharedAdsWrap {

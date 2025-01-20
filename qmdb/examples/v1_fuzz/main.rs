@@ -111,7 +111,8 @@ fn run_fuzz_single_round(
         let task_count = task_list.len() as i64;
         println!("AA height={} task_count={:#08x}", height, task_count);
         let last_task_id = (height << IN_BLOCK_IDX_BITS) | (task_count - 1);
-        let success = ads.start_block(height, Arc::new(TasksManager::new(task_list, last_task_id)));
+        let (success, _) =
+            ads.start_block(height, Arc::new(TasksManager::new(task_list, last_task_id)));
         if !success {
             unsafe {
                 if ROOT_BEFORE_SET[0] == [0u8; 32] {

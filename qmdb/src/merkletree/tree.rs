@@ -824,25 +824,28 @@ impl Tree {
         (upper_path, root)
     }
 
-    pub fn get_proof(&self, sn: u64) -> proof::ProofPath {
+    pub fn get_proof(&self, sn: u64) -> Result<proof::ProofPath, String> {
         let twig_id = sn >> TWIG_SHIFT;
         let mut path = proof::ProofPath::new();
         path.serial_num = sn;
 
         if twig_id > self.youngest_twig_id {
-            panic!("twig_id > self.youngest_twig_id");
+            return Err(format!("twig_id > self.youngest_twig_id"));
         }
 
         (path.upper_path, path.root) = self.get_upper_path_and_root(twig_id);
         if path.upper_path.is_empty() {
-            panic!("Cannot find upper path");
+            return Err(format!("Cannot find upper path"));
         }
 
         if twig_id == self.youngest_twig_id {
             path.left_of_twig = proof::get_left_path_in_mem(&self.mtree_for_youngest_twig, sn);
         } else {
-            path.left_of_twig =
-                proof::get_left_path_on_disk(&self.twig_file_wr.twig_file, twig_id, sn);
+            let twig_file = &self.twig_file_wr.twig_file;
+            if twig_file.is_empty() {
+                return Err(format!("twig_file is empty"));
+            }
+            path.left_of_twig = proof::get_left_path_on_disk(twig_file, twig_id, sn);
         }
         let (s, k) = get_shard_idx_and_key(twig_id);
         let twig = self.upper_tree.active_twig_shards[s]
@@ -853,7 +856,7 @@ impl Tree {
             .unwrap_or(&twig::NULL_ACTIVE_BITS);
         path.right_of_twig = proof::get_right_path(twig, active_bits, sn);
 
-        path
+        Ok(path)
     }
 
     pub fn get_hashes_by_pos_list(&self, pos_list: &Vec<(u8, u64)>) -> Vec<[u8; 32]> {
