@@ -1,4 +1,6 @@
 extern crate core;
+
+// Module declarations
 pub mod compactor;
 pub mod config;
 pub mod def;
@@ -10,16 +12,16 @@ pub mod indexer;
 pub mod merkletree;
 pub mod metadb;
 pub mod seqads;
+pub mod sharding;
 pub mod stateless;
 pub mod tasks;
 #[cfg(not(all(target_os = "linux", feature = "directio")))]
 pub mod uniprefetcher;
 pub mod updater;
 pub mod utils;
-
-// for test
 pub mod test_helper;
 
+// External crate imports
 use aes_gcm::{Aes256Gcm, Key, KeyInit};
 use byteorder::{BigEndian, ByteOrder};
 use entryfile::entrybuffer;
@@ -31,21 +33,20 @@ use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::Arc;
 use std::thread;
 use threadpool::ThreadPool;
+use log::{debug, error, info};
 
+// Internal imports
 use crate::compactor::{CompactJob, Compactor};
 use crate::def::{
-    COMPACT_RING_SIZE, DEFAULT_ENTRY_SIZE, IN_BLOCK_IDX_BITS, SENTRY_COUNT, SHARD_COUNT, SHARD_DIV,
-    TWIG_SHIFT,
+    COMPACT_RING_SIZE, DEFAULT_ENTRY_SIZE, IN_BLOCK_IDX_BITS, TWIG_SHIFT,
+    SENTRY_COUNT, SHARD_COUNT, SHARD_DIV
 };
 use crate::entryfile::{entry::sentry_entry, EntryBz, EntryCache, EntryFile};
 use crate::flusher::{Flusher, FlusherShard};
 use crate::indexer::Indexer;
-use crate::merkletree::{
-    recover::{bytes_to_edge_nodes, recover_tree},
-    Tree,
-};
+use crate::merkletree::{recover::{bytes_to_edge_nodes, recover_tree}, Tree};
 use crate::metadb::MetaDB;
-use log::{debug, error, info};
+use crate::sharding::*;
 
 #[cfg(all(target_os = "linux", feature = "directio"))]
 use crate::dioprefetcher::{JobManager, Prefetcher};
@@ -54,9 +55,7 @@ use crate::uniprefetcher::{JobManager, Prefetcher};
 
 use crate::tasks::{BlockPairTaskHub, Task, TaskHub, TasksManager};
 use crate::updater::Updater;
-use crate::utils::hasher;
-use crate::utils::ringchannel;
-// pub use utils::changeset::ChangeSet;
+use crate::utils::{hasher, ringchannel};
 
 pub struct AdsCore {
     task_hub: Arc<dyn TaskHub>,
@@ -357,6 +356,9 @@ impl AdsCore {
         #[cfg(feature = "tee_cipher")]
         assert!(config.aes_keys.unwrap().len() == 96);
 
+        // Set shard count from config before initializing
+        set_shard_count(config.shard_count);
+
         Self::_init_dir(
             &config.dir,
             config.file_segment_size,
@@ -379,7 +381,10 @@ impl AdsCore {
         fs::create_dir(dir).unwrap();
         let (mut ciphers, _, meta_db_cipher) = get_ciphers(aes_keys);
         let mut meta = MetaDB::with_dir(&meta_dir, meta_db_cipher);
-        for shard_id in 0..SHARD_COUNT {
+        let shard_count = get_current_shard_count();
+        let sentry_count = get_current_sentry_count();
+        
+        for shard_id in 0..shard_count {
             let mut tree = Tree::new(
                 shard_id,
                 8192,
@@ -390,7 +395,7 @@ impl AdsCore {
                 ciphers.pop_front().unwrap(),
             );
             let mut bz = [0u8; DEFAULT_ENTRY_SIZE];
-            for sn in 0..SENTRY_COUNT {
+            for sn in 0..sentry_count {
                 let e = sentry_entry(shard_id, sn as u64, &mut bz[..]);
                 tree.append_entry(&e).unwrap();
             }
@@ -398,7 +403,7 @@ impl AdsCore {
             let (entry_file_size, twig_file_size) = tree.get_file_sizes();
             meta.set_entry_file_size(shard_id, entry_file_size);
             meta.set_twig_file_size(shard_id, twig_file_size);
-            meta.set_next_serial_num(shard_id, SENTRY_COUNT as u64);
+            meta.set_next_serial_num(shard_id, sentry_count as u64);
         }
         meta.insert_extra_data(0, "".to_owned());
         meta.commit()

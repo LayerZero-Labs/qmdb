@@ -11,7 +11,7 @@ pub const ENTRY_BASE_LENGTH: usize = ENTRY_FIXED_LENGTH + TAG_SIZE;
 pub const ENTRY_BASE_LENGTH: usize = ENTRY_FIXED_LENGTH;
 
 pub const NULL_ENTRY_VERSION: i64 = -2;
-pub const SHARD_COUNT: usize = 16;
+pub const SHARD_COUNT: usize = 16; // Default value, can be overridden by config
 pub const DEFAULT_ENTRY_SIZE: usize = 300;
 
 pub const SENTRY_COUNT: usize = (1 << 16) / SHARD_COUNT;
@@ -24,6 +24,7 @@ pub const PRE_READ_BUF_SIZE: usize = 256 * 1024;
 pub const HPFILE_RANGE: i64 = 1i64 << 51; // 2048TB
 
 pub const SHARD_DIV: usize = (1 << 16) / SHARD_COUNT;
+
 pub const OP_READ: u8 = 1;
 pub const OP_WRITE: u8 = 2;
 pub const OP_CREATE: u8 = 3;

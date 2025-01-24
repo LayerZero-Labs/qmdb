@@ -22,6 +22,10 @@ pub struct Config {
     pub uring_count: usize,
     pub uring_size: u32,
     pub sub_id_chan_size: usize,
+    pub shard_count: usize,
+    pub compactor_thread_count: usize,
+    pub updater_thread_count: usize,
+    pub numa_affinity: bool,
 }
 
 impl Default for Config {
@@ -40,6 +44,10 @@ impl Default for Config {
             uring_count: URING_COUNT,
             uring_size: URING_SIZE,
             sub_id_chan_size: SUB_ID_CHAN_SIZE,
+            shard_count: 16,
+            compactor_thread_count: 16,
+            updater_thread_count: 16,
+            numa_affinity: false,
         }
     }
 }
@@ -74,6 +82,10 @@ impl Config {
             uring_count,
             uring_size,
             sub_id_chan_size,
+            shard_count: 16,
+            compactor_thread_count: 16,
+            updater_thread_count: 16,
+            numa_affinity: false,
         }
     }
 
