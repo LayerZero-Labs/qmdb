@@ -9,7 +9,7 @@ The Quick Merkle Database (QMDB) is a high-performance verifiable key-value stor
 It is designed to take advantage of modern SSDs and minimize flash write amplification with an append-only design.
 QMDB can perform in-memory Merklelization with minimal DRAM usage, and offers efficient cryptographic proofs for inclusion, exclusion, and historical states.
 
-Read the QMDB paper here: <https://layerzero.network/publications/QMDB_13Jan2025_v1.0.pdf>
+Read the QMDB paper here: <https://arxiv.org/pdf/2501.05262>
 
 *QMDB is ongoing research. Designed for high performance and practical use, some features are still evolving. We invite feedback and contributions from the community.*
 
