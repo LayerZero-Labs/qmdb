@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1737358763597,
+  "lastUpdate": 1738242309559,
   "repoUrl": "https://github.com/LayerZero-Labs/qmdb",
   "entries": {
     "Benchmark": [
@@ -530,6 +530,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "Block Population Throughput",
             "value": 91.35769038988356,
+            "unit": "ops/s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "kelvin.wong@layerzerolabs.org",
+            "name": "absolute0kelvin",
+            "username": "absolute0kelvin"
+          },
+          "committer": {
+            "email": "kelvin.wong@layerzerolabs.org",
+            "name": "absolute0kelvin",
+            "username": "absolute0kelvin"
+          },
+          "distinct": true,
+          "id": "6558ee5174608cd406ea590816e621c3f75a80db",
+          "message": "add test_start_block",
+          "timestamp": "2025-01-30T20:56:38+08:00",
+          "tree_id": "1b34e118b95664edecee90a0d60206e46e22240c",
+          "url": "https://github.com/LayerZero-Labs/qmdb/commit/6558ee5174608cd406ea590816e621c3f75a80db"
+        },
+        "date": 1738242309138,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "Block Population Throughput",
+            "value": 74.21751178518424,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Reads Throughput",
+            "value": 387660.08932192414,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Updates Throughput",
+            "value": 311874.6484470994,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Reads Latency",
+            "value": 0,
+            "unit": "ns"
+          },
+          {
+            "name": "Deletes Throughput",
+            "value": 2333549.1088409307,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Transactions Throughput",
+            "value": 146656.09295790587,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Inserts Throughput",
+            "value": 1334129.5774419396,
             "unit": "ops/s"
           }
         ]
