@@ -851,6 +851,9 @@ mod tests {
 
     use std::collections::HashSet;
 
+    use config::Config;
+    use seqads::task::TaskBuilder;
+
     use crate::{
         tasks::BlockPairTaskHub,
         test_helper::{SimpleTask, TempDir},
@@ -938,5 +941,45 @@ mod tests {
         AdsCore::init_dir(&config);
         let _ads_core = AdsCore::new(task_hub, &config);
         // assert_eq!("?", tmp_dir.list().join("\n"));
+    }
+
+    #[test]
+    fn test_start_block() {
+        let ads_dir = "./test_start_block";
+        let _tmp_dir = TempDir::new(ads_dir);
+
+        let config = Config::from_dir(ads_dir);
+        AdsCore::init_dir(&config);
+
+        let mut ads = AdsWrap::new(&config);
+
+        for h in 1..=3 {
+            let task_id = h << IN_BLOCK_IDX_BITS;
+            let r = ads.start_block(
+                h,
+                Arc::new(TasksManager::new(
+                    vec![RwLock::new(Some(
+                        TaskBuilder::new()
+                            .create(&(h as u64).to_be_bytes(), b"v1")
+                            .build(),
+                    ))],
+                    task_id,
+                )),
+            );
+            assert_eq!(r.0, true);
+            if h <= 2 {
+                assert!(r.1.is_none());
+            } else {
+                assert_eq!(r.1.as_ref().unwrap().curr_height, 1);
+                assert_eq!(r.1.as_ref().unwrap().extra_data, format!("height:{}", 1));
+            }
+            let shared_ads = ads.get_shared();
+            shared_ads.insert_extra_data(h, format!("height:{}", h));
+            shared_ads.add_task(task_id);
+        }
+        let r = ads.flush();
+        assert_eq!(r.len(), 2);
+        assert_eq!(r[0].curr_height, 2);
+        assert_eq!(r[1].curr_height, 3);
     }
 }

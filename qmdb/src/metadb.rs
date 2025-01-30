@@ -15,7 +15,7 @@ use std::{
     os::unix::fs::FileExt,
 };
 
-#[derive(serde::Serialize, serde::Deserialize, Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct MetaInfo {
     pub curr_height: i64,
     pub last_pruned_twig: [(u64, i64); SHARD_COUNT],
