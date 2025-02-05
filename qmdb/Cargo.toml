@@ -47,7 +47,7 @@ tikv-jemallocator = { version = "0.6.0", optional = true }
 [dev-dependencies]
 serial_test = "3.1.1"
 memory-stats = "1.2.0"
-rocksdb = "0.22.0"
+rocksdb = "0.23.0"
 
 [features]
 default = ["tikv-jemallocator"]
