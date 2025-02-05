@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1738694463917,
+  "lastUpdate": 1738767852819,
   "repoUrl": "https://github.com/LayerZero-Labs/qmdb",
   "entries": {
     "Benchmark": [
@@ -649,6 +649,65 @@ window.BENCHMARK_DATA = {
             "name": "Deletes Throughput",
             "value": 1616689.4603713683,
             "unit": "ops/s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zouguangxian@gmail.com",
+            "name": "Zou Guangxian",
+            "username": "zouguangxian"
+          },
+          "committer": {
+            "email": "zouguangxian@gmail.com",
+            "name": "Zou Guangxian",
+            "username": "zouguangxian"
+          },
+          "distinct": true,
+          "id": "8645fbfd4627ff18c76604c938218fc32c475531",
+          "message": "chore: enable devcontainer, rust-toolchain and Makefile",
+          "timestamp": "2025-02-05T06:31:18Z",
+          "tree_id": "5aa7464ec354c3e981611d4b2d8b1267ea25e5e0",
+          "url": "https://github.com/LayerZero-Labs/qmdb/commit/8645fbfd4627ff18c76604c938218fc32c475531"
+        },
+        "date": 1738767852492,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "Inserts Throughput",
+            "value": 598791.541664691,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Block Population Throughput",
+            "value": 80.23003555795175,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Updates Throughput",
+            "value": 304926.23549257405,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Reads Throughput",
+            "value": 548113.6340416276,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Deletes Throughput",
+            "value": 1122785.7752249122,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Transactions Throughput",
+            "value": 166000.87588702154,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Reads Latency",
+            "value": 0,
+            "unit": "ns"
           }
         ]
       }
