@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1738767852819,
+  "lastUpdate": 1738777442042,
   "repoUrl": "https://github.com/LayerZero-Labs/qmdb",
   "entries": {
     "Benchmark": [
@@ -708,6 +708,65 @@ window.BENCHMARK_DATA = {
             "name": "Reads Latency",
             "value": 0,
             "unit": "ns"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "36082651+cowboyisaac@users.noreply.github.com",
+            "name": "IsaacNotNewton",
+            "username": "cowboyisaac"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "956ce8ff553727fbdb580803bc8af4df89f89550",
+          "message": "Merge pull request #9 from LayerZero-Labs/gx/improve-build-system\n\nchore: enable devcontainer, rust-toolchain and Makefile",
+          "timestamp": "2025-02-06T01:34:36+08:00",
+          "tree_id": "5aa7464ec354c3e981611d4b2d8b1267ea25e5e0",
+          "url": "https://github.com/LayerZero-Labs/qmdb/commit/956ce8ff553727fbdb580803bc8af4df89f89550"
+        },
+        "date": 1738777441614,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "Reads Throughput",
+            "value": 410328.8082504879,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Reads Latency",
+            "value": 0,
+            "unit": "ns"
+          },
+          {
+            "name": "Transactions Throughput",
+            "value": 169128.0663425812,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Updates Throughput",
+            "value": 394595.2275893281,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Block Population Throughput",
+            "value": 98.2607165348319,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Deletes Throughput",
+            "value": 1178311.984892815,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Inserts Throughput",
+            "value": 532556.0798061274,
+            "unit": "ops/s"
           }
         ]
       }
