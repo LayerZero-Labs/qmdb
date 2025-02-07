@@ -1,8 +1,6 @@
 use parking_lot::RwLock;
 use qmdb::config::Config;
-use qmdb::def::{
-    DEFAULT_ENTRY_SIZE, IN_BLOCK_IDX_BITS, OP_CREATE,
-};
+use qmdb::def::{DEFAULT_ENTRY_SIZE, IN_BLOCK_IDX_BITS, OP_CREATE};
 use qmdb::entryfile::EntryBz;
 use qmdb::tasks::TasksManager;
 use qmdb::test_helper::SimpleTask;
@@ -58,10 +56,7 @@ fn main() {
     //task id's high 40 bits is block height and low 24 bits is task index
     let last_task_id = (height << IN_BLOCK_IDX_BITS) | (task_count - 1);
     //add the tasks into QMDB
-    ads.start_block(
-        height,
-        Arc::new(TasksManager::new(task_list, last_task_id)),
-    );
+    ads.start_block(height, Arc::new(TasksManager::new(task_list, last_task_id)));
     //multiple shared_ads can be shared by different threads
     let shared_ads = ads.get_shared();
     //you can associate some extra data in json format to each block
@@ -86,6 +81,6 @@ fn main() {
     // now we use another shared_ads to read entry out
     let shared_ads = ads.get_shared();
     let (n, ok) = shared_ads.read_entry(-1, &kh[..], &[], &mut buf);
-    let e = EntryBz{ bz: &buf[..n] };
+    let e = EntryBz { bz: &buf[..n] };
     println!("entry={:?} value={:?} ok={}", &buf[..n], e.value(), ok);
 }

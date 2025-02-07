@@ -114,7 +114,7 @@ struct RoLeaf<'a> {
     data: &'a [u8],
 }
 
-impl<'a> RoLeaf<'a> {
+impl RoLeaf<'_> {
     fn is_full(&self) -> bool {
         2 + self.len() * KV_SIZE == self.data.len()
     }
@@ -174,7 +174,7 @@ impl<'a> RoLeaf<'a> {
     }
 }
 
-impl<'a> Leaf<'a> {
+impl Leaf<'_> {
     fn to_readonly(&self) -> RoLeaf {
         RoLeaf { data: &*self.data }
     }

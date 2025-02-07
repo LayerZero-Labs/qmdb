@@ -183,7 +183,7 @@ impl<'a> EntryBz<'a> {
             res[1] = self.bz[6]; // second byte of key
             return res;
         }
-        return hasher::hash(self.key());
+        hasher::hash(self.key())
     }
 
     fn next_key_hash_start(&self) -> usize {
@@ -272,7 +272,7 @@ impl EntryVec {
 
         let mut buf_list: Vec<Box<[u8]>> = Vec::with_capacity(0);
         let total_len = bz.len();
-        for _ in 0..(next_pos + BIG_BUF_SIZE - 1) / BIG_BUF_SIZE {
+        for _ in 0..next_pos.div_ceil(BIG_BUF_SIZE) {
             let mut buf = new_big_buf_boxed();
             let size = std::cmp::min(total_len - off, BIG_BUF_SIZE);
             buf[0..size].copy_from_slice(&bz[off..off + size]);

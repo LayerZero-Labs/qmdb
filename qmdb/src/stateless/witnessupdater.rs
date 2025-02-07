@@ -266,7 +266,7 @@ impl WitnessListUpdater {
     fn get_oldest_active(&self, shard_id: usize) -> Option<EntryBz> {
         let sn = self.oldest_active_sn_list[shard_id];
         if let Some(next_sn) = self.witness_list[shard_id].find_next_active_sn(sn) {
-            return self.get_entry_by_sn(shard_id, next_sn);
+            self.get_entry_by_sn(shard_id, next_sn)
         } else {
             None
         }

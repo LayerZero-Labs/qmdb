@@ -107,7 +107,7 @@ pub struct ShortListIter<'a> {
     idx: usize,
 }
 
-impl<'a> Iterator for ShortListIter<'a> {
+impl Iterator for ShortListIter<'_> {
     type Item = (usize, i64);
 
     fn next(&mut self) -> Option<Self::Item> {

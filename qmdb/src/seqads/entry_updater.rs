@@ -348,7 +348,7 @@ impl EntryUpdater {
     }
 
     pub fn get_all_entry_bz(&self) -> Vec<EntryBz> {
-        return self.update_buffer.get_all_entry_bz();
+        self.update_buffer.get_all_entry_bz()
     }
 
     pub fn read_entry(&mut self, shard_id: usize, file_pos: i64) {

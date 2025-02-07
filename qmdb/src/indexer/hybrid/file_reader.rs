@@ -133,7 +133,9 @@ pub fn decrypt_page(page: &mut [u8], off_in_file: usize, cipher: &Option<Aes256G
     tag[..].copy_from_slice(&page[tag_start..]);
 
     let enc = &mut page[..tag_start];
-    if let Err(e) = cipher.decrypt_in_place_detached(&nonce_arr.into(), b"", enc, &tag.into()) { panic!("{:?}", e) };
+    if let Err(e) = cipher.decrypt_in_place_detached(&nonce_arr.into(), b"", enc, &tag.into()) {
+        panic!("{:?}", e)
+    };
 }
 
 #[cfg(test)]

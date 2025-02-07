@@ -934,10 +934,10 @@ impl Tree {
                 .get_twig_root(twig_id)
                 .unwrap_or(&twig::NULL_TWIG.twig_root);
         }
-        return *self
+        *self
             .upper_tree
             .get_node(NodePos::pos(level as u64, nth))
-            .unwrap_or(&NULL_NODE_IN_HIGHER_TREE[level as usize]);
+            .unwrap_or(&NULL_NODE_IN_HIGHER_TREE[level as usize])
     }
 }
 

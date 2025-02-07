@@ -46,7 +46,7 @@ impl TempFile {
 
 impl Drop for TempFile {
     fn drop(&mut self) {
-        if let Err(_) = remove_file(self.fname.clone()) {
+        if remove_file(self.fname.clone()).is_err() {
             panic!("Fail to remove file: {}", self.fname);
         }
     }

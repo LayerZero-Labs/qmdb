@@ -153,7 +153,7 @@ impl SeqAds {
                 indexer.clone(),
             )));
         }
-        
+
         Self {
             height: AtomicI64::from(curr_height),
             indexer,

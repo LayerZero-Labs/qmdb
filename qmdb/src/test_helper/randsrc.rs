@@ -114,17 +114,17 @@ impl RandSrc {
 
     pub fn get_uint16(&mut self) -> u16 {
         let bz = self.get_bytes(2);
-        return LittleEndian::read_u16(bz.as_slice());
+        LittleEndian::read_u16(bz.as_slice())
     }
 
     pub fn get_uint32(&mut self) -> u32 {
         let bz = self.get_bytes(4);
-        return LittleEndian::read_u32(bz.as_slice());
+        LittleEndian::read_u32(bz.as_slice())
     }
 
     pub fn get_uint64(&mut self) -> u64 {
         let bz = self.get_bytes(8);
-        return LittleEndian::read_u64(bz.as_slice());
+        LittleEndian::read_u64(bz.as_slice())
     }
 
     pub fn get_int8(&mut self) -> i8 {

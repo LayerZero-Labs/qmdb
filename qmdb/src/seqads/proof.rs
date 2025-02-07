@@ -374,7 +374,9 @@ impl<T: Task + 'static> SeqAdsWrap<T> {
             let prev_entry = EntryBz { bz: &buf[..size] };
             if self_pos >= 0 && prev_entry.next_key_hash() == key_hash {
                 found = true;
-            } else if prev_entry.key_hash() < *key_hash && &key_hash[..] < prev_entry.next_key_hash() {
+            } else if prev_entry.key_hash() < *key_hash
+                && &key_hash[..] < prev_entry.next_key_hash()
+            {
                 found = true;
             }
             if found {
@@ -436,7 +438,7 @@ impl<T: Task + 'static> SeqAdsWrap<T> {
         if buf.len() < size {
             return (size, true); //stop loop if buf is too small
         }
-        (size, buf_too_small)// stop loop if key matches
+        (size, buf_too_small) // stop loop if key matches
     }
 }
 

@@ -110,8 +110,7 @@ impl TestGenV2 {
             self.cur_read_num = 0;
         }
         //println!("AA gen_block cur_round={} block_count={} sp={:?}", self.cur_round, self.block_count, self.sp);
-        let mut res: Vec<RwLock<Option<SimpleTask>>> =
-            Vec::with_capacity(self.task_in_block);
+        let mut res: Vec<RwLock<Option<SimpleTask>>> = Vec::with_capacity(self.task_in_block);
         for _ in 0..self.task_in_block {
             res.push(RwLock::new(None));
         }

@@ -238,18 +238,12 @@ mod cache_shard_test {
         shard._read_bytes_at(&key0, |data| {
             buf.copy_from_slice(&data[..20]);
         });
-        assert_eq!(
-            "3536313233343536313233343536313233343536",
-            hex::encode(buf)
-        );
+        assert_eq!("3536313233343536313233343536313233343536", hex::encode(buf));
 
         shard._read_bytes_at(&key1, |data| {
             buf.copy_from_slice(&data[..20]);
         });
-        assert_eq!(
-            "6263646566616263646566616263646566616263",
-            hex::encode(buf)
-        );
+        assert_eq!("6263646566616263646566616263646566616263", hex::encode(buf));
     }
 }
 
