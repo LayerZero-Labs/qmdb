@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1738777442042,
+  "lastUpdate": 1738910275521,
   "repoUrl": "https://github.com/LayerZero-Labs/qmdb",
   "entries": {
     "Benchmark": [
@@ -766,6 +766,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "Inserts Throughput",
             "value": 532556.0798061274,
+            "unit": "ops/s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zouguangxian@gmail.com",
+            "name": "Zou Guangxian",
+            "username": "zouguangxian"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a110981ed772bebc1a98cd36fb4088fecce91a4c",
+          "message": "feat: get_proof and upper bound check (#18)\n\n* add upper bound check for tps_blocks\r\n\r\n* add get_proof function to AdsCore\r\n\r\n* add test_start_block\r\n\r\n---------\r\n\r\nCo-authored-by: absolute0kelvin <kelvin.wong@layerzerolabs.org>",
+          "timestamp": "2025-02-07T14:29:53+08:00",
+          "tree_id": "d35a2e065ea24f3ca1982a6df1debc3087199216",
+          "url": "https://github.com/LayerZero-Labs/qmdb/commit/a110981ed772bebc1a98cd36fb4088fecce91a4c"
+        },
+        "date": 1738910274715,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "Inserts Throughput",
+            "value": 448873.91830531496,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Block Population Throughput",
+            "value": 83.15764894033872,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Transactions Throughput",
+            "value": 162690.33589795127,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Reads Throughput",
+            "value": 372167.80578920274,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Deletes Throughput",
+            "value": 1803007.4777751833,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Reads Latency",
+            "value": 0,
+            "unit": "ns"
+          },
+          {
+            "name": "Updates Throughput",
+            "value": 433613.9361854013,
             "unit": "ops/s"
           }
         ]
