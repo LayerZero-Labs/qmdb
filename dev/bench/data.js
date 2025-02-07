@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1738939325781,
+  "lastUpdate": 1738939407627,
   "repoUrl": "https://github.com/LayerZero-Labs/qmdb",
   "entries": {
     "Benchmark": [
@@ -1121,6 +1121,65 @@ window.BENCHMARK_DATA = {
             "name": "Transactions Throughput",
             "value": 148780.05118985954,
             "unit": "ops/s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zouguangxian@gmail.com",
+            "name": "Zou Guangxian",
+            "username": "zouguangxian"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "29fe58ef759abfded6fc97ea29dcc262a22d5f98",
+          "message": "chore: test with nextest (#20)\n\n* chore: use nextest for testing\r\n\r\n* chore: replace write with write_all\r\n\r\n* chore: use uniq directory name to avoid failure when testing with nextest",
+          "timestamp": "2025-02-07T22:41:14+08:00",
+          "tree_id": "5fcc975266e418613bffd6d037625161f5130e5c",
+          "url": "https://github.com/LayerZero-Labs/qmdb/commit/29fe58ef759abfded6fc97ea29dcc262a22d5f98"
+        },
+        "date": 1738939407180,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "Updates Throughput",
+            "value": 237077.28861618185,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Inserts Throughput",
+            "value": 366780.49405875383,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Reads Throughput",
+            "value": 865152.0766483212,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Transactions Throughput",
+            "value": 169938.648409274,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Block Population Throughput",
+            "value": 96.85878251028713,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Deletes Throughput",
+            "value": 1714243.142281735,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Reads Latency",
+            "value": 0,
+            "unit": "ns"
           }
         ]
       }
