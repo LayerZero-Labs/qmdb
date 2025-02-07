@@ -305,7 +305,7 @@ impl HPFile {
                 buffer.resize(buffer.len() + IO_BLK_SIZE - tail_len, 0);
             }
             f.seek(SeekFrom::End(0)).unwrap();
-            f.write(buffer).unwrap();
+            f.write_all(buffer)?;
             self.file_size_on_disk
                 .fetch_add(buffer.len() as i64, Ordering::SeqCst);
             buffer.clear();
@@ -498,7 +498,7 @@ impl HPFile {
             buffer.extend_from_slice(&bz[0..split_pos]);
             let mut opt = self.file_map.get_mut(&largest_id);
             let mut f = &opt.as_mut().unwrap().value().0;
-            if f.write(buffer).is_err() {
+            if f.write_all(buffer).is_err() {
                 panic!("Fail to write file");
             }
             self.file_size_on_disk
