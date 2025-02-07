@@ -25,7 +25,7 @@ build: install-deps
 	cargo build --release
 
 test: install-deps
-	cargo test --release
+	cargo nextest run
 
 format:
 	cargo fmt --all

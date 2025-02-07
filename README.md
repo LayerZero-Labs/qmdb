@@ -83,7 +83,7 @@ cargo run --bin speed -- --entry-count 4000000
 Run unit tests:
 
 ```bash
-cargo test
+cargo nextest run
 ```
 
 ## Getting started
