@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1738910275521,
+  "lastUpdate": 1738911074933,
   "repoUrl": "https://github.com/LayerZero-Labs/qmdb",
   "entries": {
     "Benchmark": [
@@ -825,6 +825,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "Updates Throughput",
             "value": 433613.9361854013,
+            "unit": "ops/s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "dane.shea@layerzero.foundation",
+            "name": "lzdane",
+            "username": "lzdane"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "051b33d0783e4d77926da20a72a69950fbfc6cbc",
+          "message": "fix: whitepaper link broken (#8)",
+          "timestamp": "2025-02-07T14:48:29+08:00",
+          "tree_id": "5f0c0407aa8efeac8c514f87e3af31783eefdc7f",
+          "url": "https://github.com/LayerZero-Labs/qmdb/commit/051b33d0783e4d77926da20a72a69950fbfc6cbc"
+        },
+        "date": 1738911074533,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "Reads Throughput",
+            "value": 611497.9569486359,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Transactions Throughput",
+            "value": 164954.2926500953,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Updates Throughput",
+            "value": 296166.73146844114,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Inserts Throughput",
+            "value": 418442.3704534327,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Reads Latency",
+            "value": 0,
+            "unit": "ns"
+          },
+          {
+            "name": "Deletes Throughput",
+            "value": 2062664.5748497657,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Block Population Throughput",
+            "value": 82.0417433312574,
             "unit": "ops/s"
           }
         ]
