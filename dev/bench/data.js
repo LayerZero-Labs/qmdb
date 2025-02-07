@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1738923151364,
+  "lastUpdate": 1738923175637,
   "repoUrl": "https://github.com/LayerZero-Labs/qmdb",
   "entries": {
     "Benchmark": [
@@ -944,6 +944,65 @@ window.BENCHMARK_DATA = {
             "name": "Deletes Throughput",
             "value": 780279.8865513619,
             "unit": "ops/s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zouguangxian@gmail.com",
+            "name": "Zou Guangxian",
+            "username": "zouguangxian"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f44c364f80614f019315286531f3f55a3778c0a2",
+          "message": "chore: lint and format source code (#19)",
+          "timestamp": "2025-02-07T18:10:45+08:00",
+          "tree_id": "d76e129c91173f9dbd4b50c386d9ca7a04f5a152",
+          "url": "https://github.com/LayerZero-Labs/qmdb/commit/f44c364f80614f019315286531f3f55a3778c0a2"
+        },
+        "date": 1738923175262,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "Inserts Throughput",
+            "value": 1812955.3973993699,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Block Population Throughput",
+            "value": 98.34083280524307,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Transactions Throughput",
+            "value": 161794.0815013093,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Deletes Throughput",
+            "value": 859434.9382011705,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Reads Throughput",
+            "value": 456394.66823866026,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Updates Throughput",
+            "value": 276103.0700049449,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Reads Latency",
+            "value": 0,
+            "unit": "ns"
           }
         ]
       }
