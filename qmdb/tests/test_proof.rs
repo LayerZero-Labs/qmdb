@@ -61,7 +61,7 @@ fn check_equal(pp: &ProofPath, other: &ProofPath) -> String {
 
 #[test]
 fn test_tree_proof() {
-    let dir_name = "./DataTree";
+    let dir_name = "./DataTree-proof";
     let _tmp_dir = TempDir::new(dir_name);
 
     let deact_sn_list: Vec<u64> = (0..2048)

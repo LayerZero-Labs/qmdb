@@ -15,7 +15,7 @@ use std::time::Duration;
 #[cfg(not(feature = "tee_cipher"))]
 #[test]
 fn test_consistency() {
-    let ads_dir = "./SEQADS";
+    let ads_dir = "./SEQADS-consistency";
     let _tmp_dir = TempDir::new(ads_dir);
 
     let config = Config::from_dir_and_compact_opt(ads_dir, 1, 1, 1);

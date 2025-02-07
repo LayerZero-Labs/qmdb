@@ -52,7 +52,7 @@ fn compare_twigs(
 
 #[test]
 fn test_load_tree() {
-    let dir_name = "./DataTree";
+    let dir_name = "./DataTree-loadtree";
     let _tmp_dir = TempDir::new(dir_name);
 
     let deact_sn_list = vec![101, 999, 1002];

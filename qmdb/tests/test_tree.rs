@@ -12,7 +12,7 @@ use serial_test::serial;
 #[test]
 #[serial]
 fn test_tree_new() {
-    let dir_name = "./DataTree";
+    let dir_name = "./DataTree-new";
     let _tmp_dir = TempDir::new(dir_name);
 
     let tree = Tree::new(
@@ -189,7 +189,7 @@ fn test_max_n_at_level() {
 #[test]
 #[serial]
 fn test_tree_prune_nodes() {
-    let dir_name = "./DataTree";
+    let dir_name = "./DataTree-prune-nodes";
     let _tmp_dir = TempDir::new(dir_name);
 
     let mut tree = Tree::new(
@@ -354,7 +354,7 @@ fn test_tree_prune_nodes() {
 #[test]
 #[serial]
 fn test_tree_sync_mt_for_youngest_twig() {
-    let dir_name = "./DataTree";
+    let dir_name = "./DataTree-sync-mt-for-youngest-twig";
     let _tmp_dir = TempDir::new(dir_name);
 
     let mut tree = Tree::new(
@@ -414,7 +414,7 @@ fn test_tree_sync_mt_for_youngest_twig() {
 #[test]
 #[serial]
 fn test_tree_sync_mt_for_active_bits() {
-    let dir_name = "./DataTree";
+    let dir_name = "./DataTree-sync-mt-for-active-bits";
     let _tmp_dir = TempDir::new(dir_name);
 
     let mut tree = Tree::new(
@@ -472,7 +472,7 @@ fn test_tree_sync_mt_for_active_bits() {
 #[test]
 #[serial]
 fn test_tree_sync_upper_nodes() {
-    let dir_name = "./DataTree";
+    let dir_name = "./DataTree-sync-upper-nodes";
     let _tmp_dir = TempDir::new(dir_name);
 
     let mut tree = Tree::new(
@@ -519,7 +519,7 @@ fn test_tree_sync_upper_nodes() {
 #[test]
 #[serial]
 fn test_tree_append_entry() {
-    let dir_name = "./DataTree";
+    let dir_name = "./DataTree-append-entry";
     let _tmp_dir = TempDir::new(dir_name);
 
     let deact_sn_list = vec![101, 999, 1002];
