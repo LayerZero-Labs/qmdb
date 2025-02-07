@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1738923175637,
+  "lastUpdate": 1738927835829,
   "repoUrl": "https://github.com/LayerZero-Labs/qmdb",
   "entries": {
     "Benchmark": [
@@ -1003,6 +1003,65 @@ window.BENCHMARK_DATA = {
             "name": "Reads Latency",
             "value": 0,
             "unit": "ns"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zouguangxian@gmail.com",
+            "name": "Zou Guangxian",
+            "username": "zouguangxian"
+          },
+          "committer": {
+            "email": "zouguangxian@gmail.com",
+            "name": "Zou Guangxian",
+            "username": "zouguangxian"
+          },
+          "distinct": true,
+          "id": "5a1c8508dfc1272818a24b58836428884797704c",
+          "message": "chore: lint the source code",
+          "timestamp": "2025-02-07T11:28:03Z",
+          "tree_id": "f1b06cddb1c016badc31f45985d5058c7ca0e54f",
+          "url": "https://github.com/LayerZero-Labs/qmdb/commit/5a1c8508dfc1272818a24b58836428884797704c"
+        },
+        "date": 1738927834925,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "Transactions Throughput",
+            "value": 156211.64515949943,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Reads Throughput",
+            "value": 387823.4121485653,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Reads Latency",
+            "value": 0,
+            "unit": "ns"
+          },
+          {
+            "name": "Deletes Throughput",
+            "value": 1446141.3853097372,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Inserts Throughput",
+            "value": 885574.3141153877,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Block Population Throughput",
+            "value": 87.85880878567002,
+            "unit": "ops/s"
+          },
+          {
+            "name": "Updates Throughput",
+            "value": 399282.17848516296,
+            "unit": "ops/s"
           }
         ]
       }
