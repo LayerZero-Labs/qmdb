@@ -1,0 +1,31 @@
+name: 'Parse GNU Time Output'
+description: 'Parse and extract metrics from GNU time -v output'
+
+inputs:
+  content:
+    description: 'The time command output content'
+    required: true
+  fields:
+    description: 'Array of field names to include in output'
+    required: false
+    default: '["peak_memory_gb", "user_time_seconds", "system_time_seconds"]'
+
+outputs:
+  json:
+    description: 'Parsed metrics in JSON format'
+    value: ${{ steps.parse.outputs.json }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install dependencies
+      shell: bash
+      run: cd ${{ github.action_path }} && npm ci --only=production
+
+    - name: Run parser
+      id: parse
+      shell: bash
+      env:
+        INPUT_CONTENT: ${{ inputs.content }}
+        INPUT_FIELDS: ${{ inputs.fields }}
+      run: node ${{ github.action_path }}/parse.js

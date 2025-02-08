@@ -1,0 +1,22 @@
+name: 'Setup Rust Environment'
+description: 'Sets up Rust toolchain with caching'
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@c5a29ddb4d9d194e7c84ec8c3fba61b1c31fee8c
+      with:
+        toolchain: stable
+        components: rustfmt, clippy, llvm-tools-preview
+
+    - name: Install cargo-llvm-cov
+      uses: taiki-e/install-action@510b3ecd7915856b6909305605afa7a8a57c1b04 # v2.48.1
+      with:
+        tool: cargo-llvm-cov@0.6.16, cargo-nextest@0.9.88
+
+    - name: Setup Rust cache
+      uses: Swatinem/rust-cache@f0deed1e0edfc6a9be95417288c0e1099b1eeec3 # v2
+      with:
+        # Optional: cache dependencies as well
+        cache-on-failure: true

@@ -1,0 +1,40 @@
+name: 'Dump System Information'
+description: 'Dump system information about the runner'
+
+inputs:
+  cpuinfo_path:
+    description: 'Path to CPU info file'
+    required: false
+    default: '/proc/cpuinfo'
+  os_release_path:
+    description: 'Path to OS release file'
+    required: false
+    default: '/etc/os-release'
+
+runs:
+  using: "composite"
+  steps:
+    - name: Dump runner stats
+      shell: bash
+      run: |
+        echo "=== Runner System Information ==="
+        echo "CPU Information:"
+        echo "  - Cores: $(nproc)"
+        echo "  - Model: $(grep "model name" ${{ inputs.cpuinfo_path }} | head -n1 | cut -d: -f2 | sed 's/^[ \t]*//')"
+        echo "  - Architecture: $(uname -m)"
+        
+        echo -e "\nMemory Information:"
+        echo "  - Total RAM: $(free -h | awk '/^Mem:/{print $2}')"
+        echo "  - Available RAM: $(free -h | awk '/^Mem:/{print $7}')"
+        echo "  - Swap: $(free -h | awk '/^Swap:/{print $2}')"
+        
+        echo -e "\nStorage Information:"
+        echo "  - Available space: $(df -h . | awk 'NR==2{print $4}')"
+        echo "  - Total space: $(df -h . | awk 'NR==2{print $2}')"
+        echo "  - Used space: $(df -h . | awk 'NR==2{print $3}')"
+        echo "  - Use percentage: $(df -h . | awk 'NR==2{print $5}')"
+        
+        echo -e "\nOperating System:"
+        echo "  - $(cat ${{ inputs.os_release_path }} | grep PRETTY_NAME | cut -d'"' -f2)"
+        echo "  - Kernel: $(uname -r)"
+        echo "==========================="

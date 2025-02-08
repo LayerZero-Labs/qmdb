@@ -1,0 +1,88 @@
+name: Benchmark
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  pull_request:
+    branches:
+      - master
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  ENTRY_COUNT: 4000000
+
+jobs:
+  benchmark:
+    strategy:
+      matrix:
+        db: ['qmdb', 'rocksdb', 'mdbx']
+        include:
+          - db: qmdb
+            features: ""
+            continue-on-error: false
+          - db: rocksdb
+            features: "--features use_rocksdb"
+            continue-on-error: false
+          - db: mdbx
+            features: "--features use_mdbx"
+            continue-on-error: true # TODO: Fixme - MDBX fails on this. 
+    
+    name: ${{ matrix.db }} Benchmark
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+    - uses: ./.github/actions/setup-rust
+    - uses: ./.github/actions/dump-runner-stats
+    - uses: ./.github/actions/setup-benchmark
+
+    - name: Build Release (${{ matrix.db }})
+      run: |
+        cargo build --release --verbose --bin speed ${{ matrix.features }}
+
+    - name: Generate random source data
+      run: head -c 10M </dev/urandom > randsrc.dat
+
+    - name: Run ${{ matrix.db }} benchmark and parse results
+      id: bench
+      run: |
+        set -o pipefail
+        # Run command with timing, output timing to file and show command output directly
+        /usr/bin/time -v -o time_stats.txt \
+          cargo run --release --verbose --bin speed ${{ matrix.features }} -- \
+            --entry-count $ENTRY_COUNT \
+            --hover-interval 1 \
+            --hover-recreate-block 1 \
+            --hover-write-block 1 \
+            --tps-blocks 1
+        
+        delimiter="EOF"
+        echo "time_output<<$delimiter" >> $GITHUB_OUTPUT
+        cat time_stats.txt >> $GITHUB_OUTPUT
+        echo "$delimiter" >> $GITHUB_OUTPUT
+      continue-on-error: ${{ matrix.continue-on-error }}
+
+    - uses: ./.github/actions/parse-gnu-time
+      id: parse_time
+      with:
+        content: ${{ steps.bench.outputs.time_output }}
+
+    - name: Save parsed results
+      run: |
+        # Extract and save just the metrics object
+        echo '${{ steps.parse_time.outputs.json }}' | jq -r '.metrics' > ${{ matrix.db }}_benchmark.json
+
+    - name: Upload benchmark results
+      uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4
+      with:
+        name: ${{ matrix.db }}-benchmark-results
+        path: |
+          ${{ matrix.db }}_benchmark.json

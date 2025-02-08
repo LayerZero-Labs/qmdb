@@ -12,12 +12,14 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+    security_updates_only: true
 
   - package-ecosystem: "cargo"
     directories:
       - "/"
-      - "/hpfile"
-      - "/qmdb"
-      - "/bench"
+      - /bench
+      - /hpfile
+      - /qmdb
     schedule:
       interval: weekly
+    security_updates_only: true

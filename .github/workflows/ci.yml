@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  pull_request:
+    branches:
+      - master
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  format:
+    name: Format
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: ./.github/actions/setup-rust
+
+      - name: Check formatting
+        run: |
+          cargo fmt --all -- --check
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: ./.github/actions/setup-rust
+
+      - name: Run clippy
+        run: |
+          cargo clippy --all -- -D warnings
+        continue-on-error: true
+
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: ./.github/actions/setup-rust
+
+      - name: Check
+        run: |
+          cargo check --verbose
+
+  build-test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: ./.github/actions/setup-rust
+
+      # Since `test` takes less time than `build`, place `test` before `build`.
+      - name: Test
+        run: |
+          cargo nextest run
+
+      - name: Build Debug
+        run: |
+          cargo build --verbose
+
+      - name: Build Release
+        run: |
+          cargo build --release --verbose
+
+  basics-checks:
+    name: Basic checks
+    needs: [format, lint, check]
+    runs-on: ubuntu-latest
+    steps:
+      - run: exit 0
+
+  all-checks:
+    needs: [basics-checks, build-test]
+    # Override the default execution condition to prevent this job from being skipped
+    # if its dependencies fail. In GitHub Actions, a skipped job is considered successful,
+    # which is not the desired behavior here. Also, ensure the job does not run when
+    # the workflow is manually canceled.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      # Manually check the status of all dependencies. `if: failure()` does not work.
+      - name: Conclusion
+        run: |
+          # Print the dependent jobs to see them in the CI log
+          jq -C <<< '${{ toJson(needs) }}'
+          # Check if all jobs that we depend on (in the needs array) were successful.
+          jq --exit-status 'all(.result == "success")' <<< '${{ toJson(needs) }}'

@@ -10,7 +10,7 @@
 			"configureZshAsDefaultShell": true,
 			"installOhMyZsh": true,
 			"installOhMyZshConfig": true,
-			"upgradePackages": true,
+			"upgradePackages": false,
 			"username": "root"
 		}
 	},
@@ -31,21 +31,29 @@
 	// "forwardPorts": [],
 
 	// Use 'postCreateCommand' to run commands after the container is created.
-	"postCreateCommand": "rustc --version",
+	// "postCreateCommand": "rustc --version",
 
 	// Configure tool-specific properties.
 	"customizations": {
 		"vscode": {
 			"extensions": [
-				"ms-vscode.makefile-tools",
 				"ms-vscode-remote.remote-containers",
 				"rust-lang.rust-analyzer",
 				"eamodio.gitlens",
-				"redhat.vscode-yaml"
+				"redhat.vscode-yaml",
+				"github.vscode-github-actions",
+				"GitHub.vscode-codeql",
+				"GitHub.codespaces",
+				"GitHub.vscode-pull-request-github",
+				"EditorConfig.EditorConfig"
 			]
 		}
 	},
 
 	// Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.
-	"remoteUser": "root"
+	"remoteUser": "root",
+
+	"remoteEnv": {
+		"GIT_EDITOR": "nano"
+	}
 }
