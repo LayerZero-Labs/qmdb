@@ -22,7 +22,7 @@ anyhow = "1.0.86"
 byteorder = "1.5.0"
 xxhash-rust = { version = "0.8.10", features = ["xxh32", "xxh3"] }
 threadpool = "1.8.1"
-atomptr = "1.4.1"
+atomptr = "2.0.0"
 rand_core = { version = "0.6.4", features = ["getrandom"] }
 time = "0.3.36"
 rayon = "1.10.0"
