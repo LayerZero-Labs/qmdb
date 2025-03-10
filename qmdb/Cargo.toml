@@ -30,7 +30,7 @@ dashmap = "6.0.0-rc.1"
 parking_lot = { version = "0.12.1", features = ["arc_lock"] }
 blake2 = "0.10.6"
 serde = {version="1.0.210", features = ["derive"]}
-bincode = "1.3.3"
+bincode = "2.0.1"
 hpfile = { path = "../hpfile" }
 rs_merkle = "1.4"
 aes-gcm = "0.10.3"
