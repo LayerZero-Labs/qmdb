@@ -54,7 +54,7 @@ The following picture shows a "redundant update" operation. Two oldest active en
 
 Using this method, we can ensure the old enough entries are deactived if their SerialNums are less than a particular value. The twigs whose entries' SerialNums are all less than this particular value are refered to as "inactive twigs", or else "active twigs". an inactive twig has all its ActiveBits==0. Please note an active twig can also has all its ActiveBits==0. We say a twig is "active" only because it MAY have ActiveBits==1.
 
-<img src="ADS_5.png" width="600">
+<img src="figures/ADS_5.png" width="600">
 
 ## 6.0 What are the possible states of twigs
 
