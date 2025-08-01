@@ -2,7 +2,7 @@ use crate::def::{OP_CREATE, OP_DELETE, OP_READ, OP_WRITE, SHARD_COUNT};
 use crate::utils::{byte0_to_shard_id, hasher, OpRecord};
 use std::cmp::Ordering;
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, bincode::Encode, bincode::Decode)]
 pub struct ChangeSet {
     pub data: Vec<u8>,
     pub op_list: Vec<ChangeOp>,
@@ -10,7 +10,7 @@ pub struct ChangeSet {
     shard_op_count: [u32; SHARD_COUNT],
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, bincode::Encode, bincode::Decode)]
 pub struct ChangeOp {
     pub op_type: u8,
     shard_id: u8,

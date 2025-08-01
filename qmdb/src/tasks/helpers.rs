@@ -3,7 +3,7 @@ use crate::utils::changeset::ChangeSet;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, bincode::Encode, bincode::Decode)]
 pub struct SimpleTask {
     #[serde(
         serialize_with = "serialize_arc_vec",

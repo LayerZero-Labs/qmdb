@@ -19,7 +19,9 @@ pub fn byte0_to_shard_id(byte0: u8) -> usize {
     (byte0 as usize) * SHARD_COUNT / 256
 }
 
-#[derive(Debug, PartialEq, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, PartialEq, Clone, serde::Serialize, serde::Deserialize, bincode::Encode, bincode::Decode,
+)]
 pub struct OpRecord {
     pub op_type: u8,
     pub num_active: usize,

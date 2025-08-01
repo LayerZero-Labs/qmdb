@@ -1,6 +1,7 @@
 pub mod refdb;
 
 use crate::refdb::RefDB;
+use bincode::{config::standard, Decode, Encode};
 use byteorder::{ByteOrder, LittleEndian};
 use hex;
 use parking_lot::RwLock;
@@ -24,12 +25,12 @@ use std::sync::Arc;
 const BLOCK_COUNT: usize = 100; // each block about 4.5M
 const BLOCK_NUM_PER_FILE: usize = 100;
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Encode, Decode)]
 struct TaskLists {
     lists: Vec<TaskList>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Encode, Decode)]
 struct TaskList {
     tasks: Vec<SimpleTask>,
 }
@@ -56,7 +57,7 @@ fn generate_test_block(test_gen: &mut TestGenV1, start_height: usize, end_height
         task_lists.push(TaskList { tasks: task_list });
     }
     let task_lists = TaskLists { lists: task_lists };
-    let out = bincode::serialize(&task_lists).unwrap();
+    let out = bincode::encode_to_vec(&task_lists, standard()).unwrap();
     let tasks_file = format!("tasks_for_test_{}.dat", start_height / BLOCK_NUM_PER_FILE);
     let mut file = File::create_new(tasks_file).unwrap();
     file.write_all(out.as_ref()).unwrap();
@@ -89,7 +90,10 @@ fn run_fuzz_single_round(
     let file_len = file.metadata().unwrap().len();
     let mut bz = vec![0u8; file_len as usize];
     file.read(&mut bz).unwrap();
-    let task_lists = bincode::deserialize::<TaskLists>(&bz).unwrap().lists;
+    let task_lists = bincode::decode_from_slice::<TaskLists, _>(&bz, standard())
+        .unwrap()
+        .0
+        .lists;
     println!(
         "task_lists len:{:?} which sn is {:?}",
         task_lists.len(),

@@ -1,6 +1,7 @@
 use crate::def::{NONCE_SIZE, PRUNE_EVERY_NBLOCKS, SHARD_COUNT, TAG_SIZE, TWIG_SHIFT};
 use aes_gcm::aead::AeadInPlace;
 use aes_gcm::Aes256Gcm;
+use bincode::{config::standard, Decode, Encode};
 use byteorder::{ByteOrder, LittleEndian};
 use dashmap::DashMap;
 use log::warn;
@@ -15,7 +16,7 @@ use std::{
     os::unix::fs::FileExt,
 };
 
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Encode, Decode)]
 pub struct MetaInfo {
     pub curr_height: i64,
     pub last_pruned_twig: [(u64, i64); SHARD_COUNT],
@@ -100,8 +101,8 @@ impl MetaDB {
                 let size = meta_info_bz.len();
                 meta_info_bz = meta_info_bz[8..size - TAG_SIZE].to_owned();
             }
-            match bincode::deserialize::<MetaInfo>(&meta_info_bz[..]) {
-                Ok(info) => self.info = info,
+            match bincode::decode_from_slice::<MetaInfo, _>(&meta_info_bz[..], standard()) {
+                Ok((info, _)) => self.info = info,
                 Err(_) => warn!("Failed to deserialize {}, ignore it", name),
             };
         }
@@ -113,8 +114,8 @@ impl MetaDB {
                 let size = meta_info_bz.len();
                 meta_info_bz = meta_info_bz[8..size - TAG_SIZE].to_owned();
             }
-            match bincode::deserialize::<MetaInfo>(&meta_info_bz[..]) {
-                Ok(info) => {
+            match bincode::decode_from_slice::<MetaInfo, _>(&meta_info_bz[..], standard()) {
+                Ok((info, _)) => {
                     if info.curr_height > self.info.curr_height {
                         self.info = info; //pick the latest one
                     }
@@ -154,7 +155,7 @@ impl MetaDB {
         let kv = self.extra_data_map.remove(&self.info.curr_height).unwrap();
         self.info.extra_data = kv.1;
         let name = format!("{}.{}", self.meta_file_name, self.info.curr_height % 2);
-        let mut bz = bincode::serialize(&self.info).unwrap();
+        let mut bz = bincode::encode_to_vec(&self.info, standard()).unwrap();
         if self.cipher.is_some() {
             let cipher = self.cipher.as_ref().unwrap();
             let mut nonce_arr = [0u8; NONCE_SIZE];
