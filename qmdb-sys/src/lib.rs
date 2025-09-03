@@ -1,15 +1,15 @@
+use parking_lot::RwLock;
+use qmdb::config::Config;
+use qmdb::def::{IN_BLOCK_IDX_BITS, OP_CREATE, OP_DELETE, OP_WRITE};
+use qmdb::tasks::TasksManager;
+use qmdb::test_helper::SimpleTask;
+use qmdb::utils::changeset::ChangeSet;
+use qmdb::utils::{byte0_to_shard_id, hasher};
+use qmdb::{AdsCore, AdsWrap, SharedAdsWrap, ADS};
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int};
 use std::ptr;
 use std::sync::Arc;
-use parking_lot::RwLock;
-use qmdb::config::Config;
-use qmdb::def::{OP_CREATE, OP_WRITE, OP_DELETE, IN_BLOCK_IDX_BITS};
-use qmdb::tasks::TasksManager;
-use qmdb::test_helper::SimpleTask;
-use qmdb::utils::changeset::ChangeSet;
-use qmdb::utils::{hasher, byte0_to_shard_id};
-use qmdb::{AdsCore, AdsWrap, ADS, SharedAdsWrap};
 
 pub struct QmdbHandle {
     ads: Box<AdsWrap<SimpleTask>>,
@@ -32,14 +32,14 @@ pub extern "C" fn qmdb_init_dir(dir: *const c_char) -> c_int {
     if dir.is_null() {
         return -1;
     }
-    
+
     let dir_str = unsafe {
         match CStr::from_ptr(dir).to_str() {
             Ok(s) => s,
             Err(_) => return -1,
         }
     };
-    
+
     let config = Config::from_dir(dir_str);
     AdsCore::init_dir(&config);
     0
@@ -50,20 +50,18 @@ pub extern "C" fn qmdb_new(dir: *const c_char) -> *mut QmdbHandle {
     if dir.is_null() {
         return ptr::null_mut();
     }
-    
+
     let dir_str = unsafe {
         match CStr::from_ptr(dir).to_str() {
             Ok(s) => s,
             Err(_) => return ptr::null_mut(),
         }
     };
-    
+
     let config = Config::from_dir(dir_str);
     let ads = AdsWrap::new(&config);
-    
-    Box::into_raw(Box::new(QmdbHandle {
-        ads: Box::new(ads),
-    }))
+
+    Box::into_raw(Box::new(QmdbHandle { ads: Box::new(ads) }))
 }
 
 #[no_mangle]
@@ -74,7 +72,6 @@ pub extern "C" fn qmdb_free(handle: *mut QmdbHandle) {
         }
     }
 }
-
 
 #[no_mangle]
 pub extern "C" fn qmdb_changeset_new() -> *mut QmdbChangeSet {
@@ -107,7 +104,7 @@ pub extern "C" fn qmdb_changeset_add_op(
     if changeset.is_null() || key_hash.is_null() {
         return -1;
     }
-    
+
     let changeset = unsafe { &mut *changeset };
     let key_hash_slice = unsafe { std::slice::from_raw_parts(key_hash, key_hash_len) };
     let key_slice = if key.is_null() || key_len == 0 {
@@ -120,13 +117,20 @@ pub extern "C" fn qmdb_changeset_add_op(
     } else {
         unsafe { std::slice::from_raw_parts(value, value_len) }
     };
-    
+
     if key_hash_len != 32 {
         return -1;
     }
     let mut key_hash_array = [0u8; 32];
     key_hash_array.copy_from_slice(key_hash_slice);
-    changeset.changeset.add_op(op_type, shard_id, &key_hash_array, key_slice, value_slice, None);
+    changeset.changeset.add_op(
+        op_type,
+        shard_id,
+        &key_hash_array,
+        key_slice,
+        value_slice,
+        None,
+    );
     0
 }
 
@@ -147,19 +151,19 @@ pub extern "C" fn qmdb_tasks_manager_new(
     if changesets.is_null() || changeset_count == 0 {
         return ptr::null_mut();
     }
-    
+
     let mut task_list = Vec::with_capacity(changeset_count);
     for i in 0..changeset_count {
         let changeset_ptr = unsafe { *changesets.add(i) };
         if changeset_ptr.is_null() {
             return ptr::null_mut();
         }
-        
+
         let changeset = unsafe { Box::from_raw(changeset_ptr) };
         let task = SimpleTask::new(vec![changeset.changeset]);
         task_list.push(RwLock::new(Some(task)));
     }
-    
+
     Box::into_raw(Box::new(QmdbTasksManager {
         tasks_manager: Arc::new(TasksManager::new(task_list, last_task_id)),
     }))
@@ -183,12 +187,16 @@ pub extern "C" fn qmdb_start_block(
     if handle.is_null() || tasks_manager.is_null() {
         return -1;
     }
-    
+
     let handle = unsafe { &mut *handle };
     let tasks_manager = unsafe { Box::from_raw(tasks_manager) };
-    
+
     let (success, _meta_info) = handle.ads.start_block(height, tasks_manager.tasks_manager);
-    if success { 0 } else { -1 }
+    if success {
+        0
+    } else {
+        -1
+    }
 }
 
 #[no_mangle]
@@ -196,10 +204,10 @@ pub extern "C" fn qmdb_get_shared(handle: *mut QmdbHandle) -> *mut QmdbSharedHan
     if handle.is_null() {
         return ptr::null_mut();
     }
-    
+
     let handle = unsafe { &mut *handle };
     let shared_ads = handle.ads.get_shared();
-    
+
     Box::into_raw(Box::new(QmdbSharedHandle { shared_ads }))
 }
 
@@ -221,7 +229,7 @@ pub extern "C" fn qmdb_shared_insert_extra_data(
     if shared.is_null() || data.is_null() {
         return -1;
     }
-    
+
     let shared = unsafe { &mut *shared };
     let data_str = unsafe {
         match CStr::from_ptr(data).to_str() {
@@ -229,8 +237,10 @@ pub extern "C" fn qmdb_shared_insert_extra_data(
             Err(_) => return -1,
         }
     };
-    
-    shared.shared_ads.insert_extra_data(height, data_str.to_owned());
+
+    shared
+        .shared_ads
+        .insert_extra_data(height, data_str.to_owned());
     0
 }
 
@@ -257,7 +267,7 @@ pub extern "C" fn qmdb_shared_read_entry(
     if shared.is_null() || key_hash.is_null() || buf.is_null() || found.is_null() {
         return 0;
     }
-    
+
     let shared = unsafe { &mut *shared };
     let key_hash_slice = unsafe { std::slice::from_raw_parts(key_hash, key_hash_len) };
     let key_slice = if key.is_null() || key_len == 0 {
@@ -266,13 +276,16 @@ pub extern "C" fn qmdb_shared_read_entry(
         unsafe { std::slice::from_raw_parts(key, key_len) }
     };
     let buf_slice = unsafe { std::slice::from_raw_parts_mut(buf, buf_len) };
-    
-    let (size, found_entry) = shared.shared_ads.read_entry(height, key_hash_slice, key_slice, buf_slice);
-    
+
+    let (size, found_entry) =
+        shared
+            .shared_ads
+            .read_entry(height, key_hash_slice, key_slice, buf_slice);
+
     unsafe {
         *found = if found_entry { 1 } else { 0 };
     }
-    
+
     size
 }
 
@@ -281,29 +294,25 @@ pub extern "C" fn qmdb_flush(handle: *mut QmdbHandle) -> c_int {
     if handle.is_null() {
         return -1;
     }
-    
+
     let handle = unsafe { &mut *handle };
     let _meta_infos = handle.ads.flush();
     0
 }
 
 #[no_mangle]
-pub extern "C" fn qmdb_hash(
-    input: *const u8,
-    input_len: usize,
-    output: *mut u8,
-) -> c_int {
+pub extern "C" fn qmdb_hash(input: *const u8, input_len: usize, output: *mut u8) -> c_int {
     if input.is_null() || output.is_null() || input_len == 0 {
         return -1;
     }
-    
+
     let input_slice = unsafe { std::slice::from_raw_parts(input, input_len) };
     let hash = hasher::hash(input_slice);
-    
+
     unsafe {
         std::ptr::copy_nonoverlapping(hash.as_ptr(), output, 32);
     }
-    
+
     0
 }
 
