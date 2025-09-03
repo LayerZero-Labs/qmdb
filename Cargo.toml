@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "hpfile",
     "qmdb",
+    "qmdb-sys",
     "bench",
 ]
 

@@ -1,0 +1,14 @@
+[package]
+name = "qmdb-sys"
+version = "0.1.0"
+edition = "2021"
+description = "FFI bindings for the QMDB (Quantified Merkle Database) library"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+qmdb = { path = "../qmdb" }
+parking_lot = "0.12"
+
+[lib]
+name = "qmdb_sys"
+crate-type = ["cdylib", "staticlib"]
