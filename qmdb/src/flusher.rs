@@ -12,6 +12,8 @@ use parking_lot::RwLock;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::{Arc, Barrier, Condvar, Mutex};
 use std::thread;
+use chrono::Utc;
+use std::time::{Duration, Instant};
 
 type RocksMetaDB = MetaDB;
 
@@ -104,6 +106,10 @@ pub struct FlusherShard {
     upper_tree_sender: SyncSender<UpperTree>,
     #[cfg(feature = "slow_hashing")]
     upper_tree_receiver: Receiver<UpperTree>,
+    // ------------- add this -----------------
+    active_duration: Duration,
+    work_start_timer: Option<Instant>,
+    block_start_time: Option<Instant>,
 }
 
 impl FlusherShard {
@@ -123,6 +129,25 @@ impl FlusherShard {
             upper_tree_sender: ut_sender,
             #[cfg(feature = "slow_hashing")]
             upper_tree_receiver: ut_receiver,
+            // ----------------- add this -----------------
+            active_duration: Duration::new(0, 0),
+            work_start_timer: None,
+            block_start_time: None,
+        }
+    }
+
+    // --------------- add this ---------------
+    fn resume_watch(&mut self) {
+        if self.work_start_timer.is_none() {
+            self.work_start_timer = Some(Instant::now());
+        }
+    }
+
+    // ---------------- add this --------------
+    fn pause_watch(&mut self) {
+        if let Some(start) = self.work_start_timer {
+            self.active_duration += start.elapsed();
+            self.work_start_timer = None;
         }
     }
 
@@ -149,14 +174,41 @@ impl FlusherShard {
         bar_set: Arc<BarrierSet>,
         end_block_chan: SyncSender<Arc<MetaInfo>>,
     ) {
-        let buf_read = self.buf_read.as_mut().unwrap();
+ 
+        // let buf_read = self.buf_read.as_mut().unwrap();
+        
+        // ------------- add this -----------------
+        let mut buf_read = self.buf_read.take().unwrap();
+        self.block_start_time = Some(Instant::now());
+        self.active_duration = Duration::new(0, 0);
+        self.work_start_timer = None;
+        // ------- add timestamp flag -------
+        let mut has_started_logging = false;
+        // ----------------------------------
+
         loop {
             let mut file_pos: i64 = 0;
             let (is_end_of_block, expected_file_pos) = buf_read.read_next_entry(|entry_bz| {
+                
+                self.resume_watch();
+                // --------- add timestamp ---------
+                if !has_started_logging {
+                    println!(
+                        "PIPELINE_LOG: FLUSHER_SHARD_START height={} shard={} timestamp={}",
+                        curr_height,
+                        self.shard_id,
+                        Utc::now().to_rfc3339()
+                    );
+                    has_started_logging = true;
+                }
+                // --------------------------------- 
+
                 file_pos = self.tree.append_entry(&entry_bz).unwrap();
                 for (_, dsn) in entry_bz.dsn_iter() {
                     self.tree.deactive_entry(dsn);
                 }
+                // ------------ add this ------------
+                self.pause_watch();
             });
             if !is_end_of_block && file_pos != expected_file_pos {
                 panic!("File_pos mismatch!");
@@ -165,7 +217,12 @@ impl FlusherShard {
                 break;
             }
         }
+
+
         let (compact_done_pos, compact_done_sn, sn_end) = buf_read.read_extra_info();
+
+        // --------------- add this --------------
+        self.resume_watch();
 
         #[cfg(feature = "slow_hashing")]
         {
@@ -204,7 +261,12 @@ impl FlusherShard {
             let (entry_file_size, twig_file_size) = self.tree.get_file_sizes();
             let last_compact_done_sn = self.last_compact_done_sn;
             self.last_compact_done_sn = compact_done_sn;
+            // --------------- 修改：这里也要暂停 ---------------
+            self.pause_watch(); 
             bar_set.flush_bar.wait();
+            self.resume_watch();
+            // ----------------------------------------------
+            // bar_set.flush_bar.wait();
 
             let youngest_twig_id = self.tree.youngest_twig_id;
             let shard_id = self.shard_id;
@@ -255,7 +317,25 @@ impl FlusherShard {
 
                 if shard_id == 0 {
                     meta.set_curr_height(curr_height);
+                    
+                    // --------- add timestamp ---------
+                    println!(
+                        "PIPELINE_LOG: FLUSHER_GLOBAL_COMMIT_START height={} timestamp={}",
+                        curr_height,
+                        Utc::now().to_rfc3339()
+                    );
+                    // ---------------------------------  
+                    
                     let meta_info = meta.commit();
+
+                    // --------- add timestamp ---------
+                    println!(
+                        "PIPELINE_LOG: FLUSHER_GLOBAL_COMMIT_END height={} timestamp={}",
+                        curr_height,
+                        Utc::now().to_rfc3339()
+                    );
+                    // ---------------------------------  
+
                     drop(meta);
                     match end_block_chan.send(meta_info) {
                         Ok(_) => {
@@ -307,7 +387,14 @@ impl FlusherShard {
             let (entry_file_size, twig_file_size) = self.tree.get_file_sizes();
             let last_compact_done_sn = self.last_compact_done_sn;
             self.last_compact_done_sn = compact_done_sn;
+
+            // --------------- 修改 2: 遇到 Barrier 暂停计时 --------------
+            self.pause_watch(); // <--- 暂停！不要把等待时间算进去
             bar_set.flush_bar.wait();
+            self.resume_watch(); // <--- 恢复！大家到齐了，继续干活
+            // --------------------------------------------------------
+
+            // bar_set.flush_bar.wait();
 
             let youngest_twig_id = self.tree.youngest_twig_id;
             let shard_id = self.shard_id;
@@ -328,6 +415,25 @@ impl FlusherShard {
             }
 
             self.handle_proof_req();
+
+            // --------- add timestamp ---------
+            self.pause_watch();
+
+            let active_ratio = if let Some(start) = self.block_start_time {
+                let total = start.elapsed().as_secs_f64();
+                let active = self.active_duration.as_secs_f64();
+                if total > 0.0 { active / total } else { 0.0 }
+            } else { 0.0 };
+
+            println!(
+                "PIPELINE_LOG: FLUSHER_SHARD_END height={} shard={} timestamp={} active_ratio={:.4}",
+                curr_height,
+                self.shard_id,
+                Utc::now().to_rfc3339(),
+                active_ratio 
+            );
+            self.block_start_time = None; // Reset
+            // ---------------------------------  
 
             //shard#0 must wait other shards to finish
             if shard_id == 0 {
@@ -356,7 +462,25 @@ impl FlusherShard {
 
             if shard_id == 0 {
                 meta.set_curr_height(curr_height);
+                    
+                // --------- add timestamp ---------
+                println!(
+                    "PIPELINE_LOG: FLUSHER_GLOBAL_COMMIT_START height={} timestamp={}",
+                    curr_height,
+                    Utc::now().to_rfc3339()
+                );
+                // ---------------------------------  
+                
                 let meta_info = meta.commit();
+
+                // --------- add timestamp ---------
+                println!(
+                    "PIPELINE_LOG: FLUSHER_GLOBAL_COMMIT_END height={} timestamp={}",
+                    curr_height,
+                    Utc::now().to_rfc3339()
+                );
+                // ---------------------------------  
+
                 drop(meta);
                 match end_block_chan.send(meta_info) {
                     Ok(_) => {
@@ -371,6 +495,7 @@ impl FlusherShard {
                 bar_set.metadb_bar.wait();
             }
         }
+        self.buf_read = Some(buf_read);
     }
 }
 

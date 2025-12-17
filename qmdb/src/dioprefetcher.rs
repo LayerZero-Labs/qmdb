@@ -4,6 +4,9 @@ use crate::indexer::Indexer;
 use crate::tasks::TaskHub;
 use crate::utils::byte0_to_shard_id;
 use crate::utils::bytescache::new_cache_pos;
+use chrono::Utc;
+use crate::def::{IN_BLOCK_IDX_MASK};
+use std::time::Instant;
 use dashmap::DashMap;
 use hpfile::{direct_io, IO_BLK_SIZE};
 use lazy_static::lazy_static;
@@ -89,6 +92,15 @@ impl Prefetcher {
         let (cache_for_new_block, end_block) = self.task_hub.check_begin_end(task_id);
         if cache_for_new_block.is_some() {
             self.cache = cache_for_new_block.unwrap();
+            
+            // ------------- add timestamp -------------
+            println!(
+                "PIPELINE_LOG: PREFETCHER_ENTER height={} timestamp={}",
+                task_id >> IN_BLOCK_IDX_BITS,
+                Utc::now().to_rfc3339()
+            );
+            // -----------------------------------------
+
         }
         let mut next_task_id = task_id + 1;
         let height = task_id >> IN_BLOCK_IDX_BITS;
@@ -99,15 +111,40 @@ impl Prefetcher {
         let task_hub = self.task_hub.clone();
         let change_sets = task_hub.get_change_sets(task_id).clone();
         //println!("AA to_get_job task_id={:#016x}", task_id);
+
+        // let start_wait = Instant::now(); // <--- 计时开始
         let mut job = self.bck_receiver.recv().unwrap();
+        // let wait_job_time = start_wait.elapsed(); // <--- 计时结束
+        // if wait_job_time.as_micros() > 1000 {
+            //  println!("WARN: Job Pool Starvation! Waited {:?} for a free job.", wait_job_time);
+        // }
+
         job.task_id = task_id;
         job.next_task_id = next_task_id;
         job.cache = self.cache.clone();
+        
+        // ---------------- add this -----------------
+        job.is_last_task_of_block = end_block;
+        // -------------------------------------------
+
         let indexer = self.indexer.clone();
         let change_sets = change_sets.clone();
         let job_man = self.job_man.clone();
         self.tpool.execute(move || {
+
+            // ------------- add timestamp -------------
+            if (task_id & IN_BLOCK_IDX_MASK) == 0 {
+                println!(
+                    "PIPELINE_LOG: PREFETCHER_READ_START height={} timestamp={}",
+                    height,
+                    Utc::now().to_rfc3339()
+                );
+            }
+            // -----------------------------------------
+            
             let mut sub_id = (task_id << 32) as u64;
+
+            // let start_index = Instant::now();
             for change_set in change_sets.iter() {
                 change_set.run_all(|op, kh: &[u8; 32], _k, _v, _r| {
                     let shard_id = byte0_to_shard_id(kh[0]);
@@ -124,21 +161,40 @@ impl Prefetcher {
                     });
                 });
             }
+
+            // let index_time = start_index.elapsed(); // <--- 计时结束
+
+            // 如果索引耗时超过 5ms (对于内存操作来说这很久了)，说明 CPU 是瓶颈
+            // if index_time.as_millis() > 5 {
+            //      println!("WARN: Indexing Slow! Took {:?}.", index_time);
+            // }
             //if task_id==TASK_ID {
             //    println!("HH read_counts[0]={}", job.read_counts[0].load(Ordering::SeqCst));
             //}
             //println!("AA mid task_id={:#016x}", task_id);
+
+            // --------------------- delete this ----------------
+            // for shard_id in 0..SHARD_COUNT {
+            //     if job.read_counts[shard_id].load(Ordering::SeqCst) == 0 {
+            //         //if (task_id >> 24) == 1 {
+            //         //    println!("S{} {:#016x}-{:#016x} a", shard_id, task_id, next_task_id);
+            //         //}
+            //         job_man.done_chans[shard_id]
+            //             .send((task_id, next_task_id))
+            //             .unwrap();
+            //     }
+            // }
+            //job_man.add_job(Arc::new(job));
+
+            // ------------------------ add this -------------------
+            let job_arc = Arc::new(job); // job_arc 现在是 Arc<Box<Job>>
             for shard_id in 0..SHARD_COUNT {
-                if job.read_counts[shard_id].load(Ordering::SeqCst) == 0 {
-                    //if (task_id >> 24) == 1 {
-                    //    println!("S{} {:#016x}-{:#016x} a", shard_id, task_id, next_task_id);
-                    //}
-                    job_man.done_chans[shard_id]
-                        .send((task_id, next_task_id))
-                        .unwrap();
+                if job_arc.read_counts[shard_id].load(Ordering::SeqCst) == 0 {
+                    job_man.handoff_and_check_completion(&job_arc, shard_id); 
                 }
             }
-            job_man.add_job(Arc::new(job));
+            job_man.add_job(job_arc);
+
         });
     }
 }
@@ -168,6 +224,28 @@ impl JobManager {
         self.update_buffers.push(update_buffer);
         self.entry_files.push(entry_file);
         self.done_chans.push(done_chan);
+    }
+
+    fn handoff_and_check_completion(&self, job: &Arc<Box<Job>>, shard_id: usize) {
+        // 1. 移交任务给 Updater 线程
+        self.done_chans[shard_id]
+            .send((job.task_id, job.next_task_id))
+            .unwrap();
+
+        // 2. 检查这是否是 *Block* 的最后一个 *Task*
+        if job.is_last_task_of_block {
+            // 3. 递减“剩余分片”计数器。
+            // 如果这是最后一个分片 (计数器从 1 变为 0)，则打印日志
+            if job.shards_remaining.fetch_sub(1, Ordering::SeqCst) == 1 {
+                
+                // ++++++++++ 3. PREFETCHER_LEAVE (Block 离开) ++++++++++
+                println!(
+                    "PIPELINE_LOG: PREFETCHER_LEAVE height={} timestamp={}",
+                    job.task_id >> IN_BLOCK_IDX_BITS,
+                    Utc::now().to_rfc3339()
+                );
+            }
+        }
     }
 
     // return whether need to read SSD
@@ -238,9 +316,13 @@ impl JobManager {
                 self.sub_id_to_job.insert(sj.sub_id, job.clone());
             } else {
                 if job.read_counts[sj.shard_id].fetch_sub(1, Ordering::SeqCst) == 1 {
-                    self.done_chans[sj.shard_id]
-                        .send((job.task_id, job.next_task_id))
-                        .unwrap();
+                    // --------------- delete this --------------
+                    // self.done_chans[sj.shard_id]
+                    //     .send((job.task_id, job.next_task_id))
+                    //     .unwrap();
+
+                    // --------------- add this -----------------
+                    self.handoff_and_check_completion(&job, sj.shard_id);
                 }
             }
         }
@@ -253,7 +335,14 @@ impl JobManager {
                 // select a io_uring in a pseudo-random way
                 let idx = (n ^ (n >> 32)) % self.sub_id_senders.len();
                 //println!("AA send sub_id {:#016x}", sj.sub_id);
+
+                // let start_send = Instant::now(); // <--- 计时开始
                 self.sub_id_senders[idx].send(sj.sub_id);
+                // let send_duration = start_send.elapsed(); // <--- 计时结束
+                // 如果发送 sub_id 都要等，说明 IO 队列满了！
+                // if send_duration.as_micros() > 100 { 
+                    // println!("WARN: IO Queue Full! Blocked {:?} sending sub_id.", send_duration);
+                // }
             }
         }
         self.recycle_job_object(job);
@@ -346,10 +435,16 @@ impl JobManager {
         }
         job.cache.insert(sj.shard_id, sj.file_pos, &e);
         // the last finished sub_job send task_id to done_chan
-        if job.read_counts[sj.shard_id].fetch_sub(1, Ordering::SeqCst) == 1 {
-            self.done_chans[sj.shard_id]
-                .send((job.task_id, job.next_task_id))
-                .unwrap();
+        // ------------------ delete this ----------------
+        // if job.read_counts[sj.shard_id].fetch_sub(1, Ordering::SeqCst) == 1 {
+        //     self.done_chans[sj.shard_id]
+        //         .send((job.task_id, job.next_task_id))
+        //         .unwrap();
+        // }
+        // ------------------ add this -------------------
+        let shard_id = sj.shard_id;
+        if job.read_counts[shard_id].fetch_sub(1, Ordering::SeqCst) == 1 {
+            self.handoff_and_check_completion(&job, shard_id);
         }
         self.recycle_job_object(job);
     }
@@ -362,6 +457,10 @@ pub struct Job {
     next_task_id: i64,
     sub_jobs: Vec<SubJob>,
     sub_job_count: usize,
+    // -------------- add -----------------
+    is_last_task_of_block: bool,
+    shards_remaining: AtomicUsize,
+    // ------------------------------------
 }
 
 struct SubJob {
@@ -380,6 +479,10 @@ impl Default for Job {
         }
         Self {
             read_counts: Arc::new(v),
+            // -------------- add -----------------
+            shards_remaining: AtomicUsize::new(SHARD_COUNT),
+            is_last_task_of_block: false,
+            // ------------------------------------
             cache: NULL_CACHE.clone(),
             task_id: i64::MIN,
             next_task_id: i64::MIN,
@@ -429,6 +532,10 @@ impl Job {
         for i in 0..SHARD_COUNT {
             self.read_counts[i].store(0, Ordering::SeqCst);
         }
+        // ----------------- add -----------------
+        self.shards_remaining.store(SHARD_COUNT, Ordering::SeqCst);
+        self.is_last_task_of_block = false;
+        // ---------------------------------------
         self.cache = NULL_CACHE.clone();
         self.task_id = i64::MIN;
         self.next_task_id = i64::MIN;

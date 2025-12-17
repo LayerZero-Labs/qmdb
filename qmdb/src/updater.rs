@@ -12,6 +12,10 @@ use crate::{
 };
 use std::collections::HashMap;
 use std::sync::Arc;
+use chrono::Utc;
+use std::time::{Duration, Instant};
+use crate::metrics;
+use std::sync::atomic::Ordering;
 
 pub struct Updater {
     shard_id: usize,
@@ -32,6 +36,10 @@ pub struct Updater {
     compact_thres: i64,
     next_task_id_map: HashMap<i64, i64>,
     next_task_id: i64,
+    // ---------------- add this ------------------
+    active_duration: Duration,
+    work_start_timer: Option<Instant>,
+    block_start_time: Option<Instant>,
 }
 
 impl Updater {
@@ -70,6 +78,26 @@ impl Updater {
             compact_thres,
             next_task_id_map: HashMap::new(),
             next_task_id,
+            // --------------- add this -----------------
+            active_duration: Duration::new(0, 0),
+            work_start_timer: None,
+            block_start_time: None,
+        }
+    }
+
+
+    // --------------- add this -----------------
+    fn resume_watch(&mut self) {
+        if self.work_start_timer.is_none() {
+            self.work_start_timer = Some(Instant::now());
+        }
+    }
+
+    // ---------------- add this ----------------
+    fn pause_watch(&mut self) {
+        if let Some(start) = self.work_start_timer {
+            self.active_duration += start.elapsed();
+            self.work_start_timer = None;
         }
     }
 
@@ -124,6 +152,9 @@ impl Updater {
     }
 
     pub fn run_task(&mut self, task_id: i64) {
+        // ------------- add this ---------------
+        self.resume_watch();
+
         let (cache_for_new_block, end_block) = self.task_hub.check_begin_end(task_id);
         if let Some(cache) = cache_for_new_block {
             self.cache = cache;
@@ -132,7 +163,24 @@ impl Updater {
         if (task_id & IN_BLOCK_IDX_MASK) == 0 {
             //task_index ==0 and new block start
             self.curr_version = task_id;
+            
+            // ------------- add this ----------------
+            self.block_start_time = Some(Instant::now());
+            // ------------- add this ----------------
+            self.active_duration = Duration::new(0, 0);
+
+            // -------------- add this -----------------
+            let height = task_id >> IN_BLOCK_IDX_BITS;
+            println!(
+                "PIPELINE_LOG: UPDATER_START height={} shard={} timestamp={}",
+                height,
+                self.shard_id,
+                Utc::now().to_rfc3339()
+            );
+            // ---------------------------------
+
         }
+        
         for change_set in &*task_hub.get_change_sets(task_id) {
             change_set.run_in_shard(self.shard_id, |op, key_hash, k, v, r| {
                 self.compare_active_info(r);
@@ -148,10 +196,40 @@ impl Updater {
             });
             self.curr_version += 1;
         }
+
         if end_block {
+            // --------- add this --------------
+            self.pause_watch();
+            // --------- add timestamp ---------
+            let height = task_id >> IN_BLOCK_IDX_BITS;
+
+            let active_ratio = if let Some(block_start) = self.block_start_time {
+                let total_secs = block_start.elapsed().as_secs_f64();
+                let active_secs = self.active_duration.as_secs_f64();
+                if total_secs > 0.0 {
+                    active_secs / total_secs
+                } else {
+                    0.0
+                }
+            } else {
+                0.0
+            };
+
+            println!(
+                "PIPELINE_LOG: UPDATER_END height={} shard={} timestamp={} active_ratio={:.4}",
+                height,
+                self.shard_id,
+                Utc::now().to_rfc3339(),
+                active_ratio // 输出占比，例如 0.8523 表示 85.23%
+            );
+            self.block_start_time = None;
+            // ---------------------------------  
+
             self.update_buffer
                 .end_block(self.compact_done_pos, self.sn_start, self.sn_end);
         }
+        // ---------------- add this ------------------
+        self.pause_watch();
     }
 
     fn write_kv(
@@ -191,6 +269,12 @@ impl Updater {
             serial_number: self.sn_end,
         };
         let dsn_list: [u64; 1] = [old_entry.serial_number()];
+
+        // -------------------- add this --------------------
+        let entry_len = new_entry.get_serialized_len(dsn_list.len());
+        metrics::PHYSICAL_WRITE_BYTES_USER.fetch_add(entry_len as u64, Ordering::Relaxed);
+        // --------------------------------------------------
+
         let new_pos = self.update_buffer.append(&new_entry, &dsn_list[..]);
         self.indexer
             .change_kv(&key_hash[..], old_pos, new_pos, dsn_list[0], self.sn_end);
@@ -248,6 +332,12 @@ impl Updater {
         };
         let dsn_list: [u64; 2] = [del_entry_sn, prev_entry.serial_number()];
         compare_prev_changed(r, &prev_changed, &dsn_list[..]);
+
+        // -------------------- add this --------------------
+        let entry_len = prev_changed.get_serialized_len(dsn_list.len());
+        metrics::PHYSICAL_WRITE_BYTES_USER.fetch_add(entry_len as u64, Ordering::Relaxed);
+        // --------------------------------------------------
+
         let new_pos = self.update_buffer.append(&prev_changed, &dsn_list[..]);
 
         self.indexer
@@ -316,6 +406,13 @@ impl Updater {
         //);
         let dsn_list: [u64; 1] = [prev_entry.serial_number()];
         compare_prev_changed(r, &prev_changed, &dsn_list[..]);
+
+        // -------------------- add this --------------------
+        let entry_len = new_entry.get_serialized_len(dsn_list.len()) + prev_changed.get_serialized_len(dsn_list.len());
+        metrics::PHYSICAL_WRITE_BYTES_USER.fetch_add(entry_len as u64, Ordering::Relaxed);
+        // --------------------------------------------------
+
+
         let new_pos = self.update_buffer.append(&prev_changed, &dsn_list[..]);
         //println!("new_pos:{:?}", new_pos);
         self.indexer.add_kv(&key_hash[..], create_pos, self.sn_end);
@@ -336,8 +433,15 @@ impl Updater {
 
     pub fn compact(&mut self, r: Option<&Box<OpRecord>>, comp_idx: usize) {
         let (job, kh) = loop {
+            // ------------- add this -------------
+            self.pause_watch();
+
             //println!("before updater what something from consumer channel");
             let job = self.compact_consumer.consume();
+
+            // -------------- add this --------------
+            self.resume_watch();
+
             let e = EntryBz { bz: &job.entry_bz };
             let kh = e.key_hash();
 
@@ -346,6 +450,8 @@ impl Updater {
             }
             self.compact_consumer.send_returned(job);
         };
+
+        metrics::PHYSICAL_WRITE_BYTES_GC.fetch_add(job.entry_bz.len() as u64, Ordering::Relaxed);
 
         let entry_bz = EntryBz { bz: &job.entry_bz };
 

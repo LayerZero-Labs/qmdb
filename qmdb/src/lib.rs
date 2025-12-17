@@ -2,6 +2,7 @@ extern crate core;
 pub mod compactor;
 pub mod config;
 pub mod def;
+pub mod metrics;
 #[cfg(all(target_os = "linux", feature = "directio"))]
 pub mod dioprefetcher;
 pub mod entryfile;
@@ -32,6 +33,7 @@ use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use threadpool::ThreadPool;
+use chrono::Utc;
 
 use crate::compactor::{CompactJob, Compactor};
 use crate::def::{
@@ -766,7 +768,26 @@ impl<T: Task + 'static> AdsWrap<T> {
         let mut meta_info = Option::None;
         if self.task_hub.free_slot_count() == 0 {
             // adscore and task_hub are busy, wait for them to finish an old block
+
+            // --------- add timestamp ---------
+            println!(
+                "PIPELINE_LOG: CLIENT_WAIT_START height={} timestamp={}",
+                height,
+                Utc::now().to_rfc3339()
+            );
+            // ---------------------------------  
+
             let _meta_info = self.end_block_chan.recv().unwrap();
+
+            // --------- add timestamp ---------
+            println!(
+                "PIPELINE_LOG: CLIENT_WAIT_END height={} received_height={} timestamp={}",
+                height,
+                _meta_info.curr_height,
+                Utc::now().to_rfc3339()
+            );
+            // ---------------------------------  
+
             self.task_hub.end_block(_meta_info.curr_height);
             meta_info = Some(_meta_info);
         }

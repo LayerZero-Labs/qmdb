@@ -17,12 +17,19 @@ use qmdb::indexer::hybrid::index_cache::COUNTERS;
 use qmdb::test_helper::RandSrc;
 use qmdb::test_helper::SimpleTask;
 use qmdb::utils::{byte0_to_shard_id, changeset::ChangeSet, hasher};
+use qmdb::metrics; // <--- 用于 WA/RA
 
-use byteorder::BigEndian;
-use byteorder::ByteOrder;
+use byteorder::{BigEndian, ByteOrder};
 use clap::Parser;
 use log::{info, warn};
 use parking_lot::RwLock;
+
+use std::ffi::CString;
+use std::mem;
+use chrono::Utc; // <--- 用于 GC 监控和时间戳
+use std::thread; // <--- 用于 GC 监控
+use qmdb::def::SHARD_COUNT; // <--- 用于 GC 监控
+use serde_json; // <--- 用于 WA/RA
 
 const PRIME1: u64 = 1299827; // Used for stride for hover_recreate_block
 
@@ -50,6 +57,97 @@ fn main() {
     println!("Using database backend: {}", db_backend::NAME);
     results.db_backend = db_backend::NAME.to_string();
     results.log_time("initialized");
+
+    // ===== VVV GC 监控线程 VVV =====
+    let table_id_for_monitor = 0; // 假设我们总是监控表 0
+    // [New] 传入 db_dir 路径，以便监控该路径所在的分区
+    let monitor_db_dir = args.db_dir.clone();
+    let _monitor_handle = thread::spawn(move || {
+        // 等待 15 秒，让数据库有时间完全启动并运行
+        thread::sleep(Duration::from_secs(15));
+
+        loop {
+            // 尝试获取数据库句柄
+            if let Some((metadb_arc, indexer_arc)) = db_backend::get_db_handles(table_id_for_monitor) {
+                
+                let metadb = metadb_arc.read(); // 获取 MetaDB 的读锁
+                let mut total_garbage_entries: u64 = 0;
+                let mut total_active_entries: u64 = 0;
+                let mut total_on_disk_entries: u64 = 0;
+                let mut total_disk_size_bytes: u64 = 0;
+                let mut estimated_garbage_size_bytes: f64 = 0.0;
+
+                // 遍历所有 Shard 并聚合数据
+                for shard_id in 0..SHARD_COUNT {
+                    let sn_start = metadb.get_oldest_active_sn(shard_id);
+                    let sn_end = metadb.get_next_serial_num(shard_id);
+                    let active_entries = indexer_arc.len(shard_id) as u64;
+                    let file_size = metadb.get_entry_file_size(shard_id);
+
+                    let shard_total_entries = if sn_end > sn_start { sn_end - sn_start } else { 0 };
+                    let shard_garbage_entries = if shard_total_entries > active_entries { shard_total_entries - active_entries } else { 0 };
+                    
+                    let garbage_ratio = if shard_total_entries > 0 {
+                        shard_garbage_entries as f64 / shard_total_entries as f64
+                    } else {
+                        0.0
+                    };
+
+                    total_garbage_entries += shard_garbage_entries;
+                    total_active_entries += active_entries;
+                    total_on_disk_entries += shard_total_entries;
+                    total_disk_size_bytes += file_size as u64;
+                    estimated_garbage_size_bytes += (file_size as f64) * garbage_ratio;
+                }
+                
+                // 在打印前显式释放锁
+                drop(metadb); 
+
+                // ===== [New] 获取物理磁盘真实使用量 =====
+                let mut physical_used_bytes: u64 = 0;
+                let mut physical_total_bytes: u64 = 0;
+
+                unsafe {
+                    let path = CString::new(monitor_db_dir.as_str()).unwrap_or_default();
+                    let mut stats: libc::statvfs = mem::zeroed();
+                    
+                    if libc::statvfs(path.as_ptr(), &mut stats) == 0 {
+                        let block_size = stats.f_frsize as u64; // 文件系统块大小
+                        let total_blocks = stats.f_blocks as u64;
+                        let free_blocks = stats.f_bfree as u64; // Root 可用的空闲块
+                        // 或者用 f_bavail (非特权用户可用)，通常数据库用 f_bfree 更接近物理真实
+                        
+                        physical_total_bytes = total_blocks * block_size;
+                        physical_used_bytes = (total_blocks - free_blocks) * block_size;
+                    } else {
+                        warn!("Failed to get disk stats for {}", monitor_db_dir);
+                    }
+                }
+                // =========================================
+
+                // 打印我们的快照日志
+                println!(
+                    "GC_SNAPSHOT: Timestamp={} TotalEntries(Disk)={} ActiveEntries(Mem)={} GarbageEntries={} TotalDiskSizeMB={:.2} EstGarbageSizeMB={:.2} PhysicalDiskUsedMB={:.2} PhysicalDiskTotalMB={:.2}",
+                    Utc::now().to_rfc3339(),
+                    total_on_disk_entries,
+                    total_active_entries,
+                    total_garbage_entries,
+                    total_disk_size_bytes as f64 / (1024.0 * 1024.0),
+                    estimated_garbage_size_bytes / (1024.0 * 1024.0),
+                    physical_used_bytes as f64 / (1024.0 * 1024.0), // [New]
+                    physical_total_bytes as f64 / (1024.0 * 1024.0) // [New]
+                );
+
+            } else {
+                // 这种情况可能在启动时发生
+                println!("GC_SNAPSHOT: 等待数据库句柄...");
+            }
+            
+            // 定义你的采样周期
+            thread::sleep(Duration::from_secs(10));
+        }
+    });
+    // ===== ^^^ GC 监控线程 ^^^ =====
 
     // Calculate tasks (transactions) per block based on desired ops per block
     // Each task contains changesets_per_task changesets
@@ -175,6 +273,15 @@ fn run(
     let mut current_decile_print: i64 = -1;
 
     // let bm_result = panic::catch_unwind(move || {
+    let mut last_snapshot_time = Instant::now();
+    let mut last_user_bytes = 0u64;
+    let mut last_gc_bytes = 0u64;
+    let REPORT_INTERVAL = 2; // 每 4 个 Block 输出一次
+    
+    // ===== VVV TIMESTAMP 1 (Population Start) VVV =====
+    println!("Timestamp: {}", Utc::now().to_rfc3339());
+    // ===== ^^^ TIMESTAMP ^^^ =====
+
     // Populate the database
     for produced_blocks in 0..blk_in_round {
         // Every hover_interval blocks, we run hover tasks to benchmark ops
@@ -207,7 +314,23 @@ fn run(
         }
 
         // Generate transactions to populate the database.
+
+        // ------------- add timestamp -------------
+        println!(
+            "PIPELINE_LOG: CLIENT_GENERATE_START height={} timestamp={}",
+            height,
+            Utc::now().to_rfc3339()
+        );
+        // -----------------------------------------
         let task_list = test_gen.gen_block();
+        // ------------- add timestamp -------------
+        println!(
+            "PIPELINE_LOG: CLIENT_GENERATE_END height={} timestamp={}",
+            height,
+            Utc::now().to_rfc3339()
+        );
+        // -----------------------------------------
+
         // let task_count = task_list.len() as i64;
         // if height % 10 == 5 {
         //     // Progress update every increase in height of 5
@@ -219,10 +342,33 @@ fn run(
         //         start.elapsed()
         //     );
         // }
+
+        // ------------- add timestamp -------------
+        println!(
+            "PIPELINE_LOG: CLIENT_SUBMIT_START height={} timestamp={}",
+            height,
+            Utc::now().to_rfc3339()
+        );
+        // -----------------------------------------
+
         db_backend::create_kv(table_id, height, task_list);
+
+        // ------------- add timestamp -------------        
+        println!(
+            "PIPELINE_LOG: CLIENT_SUBMIT_END height={} timestamp={}",
+            height,
+            Utc::now().to_rfc3339()
+        );
+        // -----------------------------------------
+        
         height += 1;
 
         results.update_entries_in_db((produced_blocks + 1) * test_gen.num_op_in_blk());
+
+        if height % REPORT_INTERVAL == 0 {
+            // 使用通用函数打印并更新快照
+            log_io_stat(height, &mut last_snapshot_time, &mut last_user_bytes, &mut last_gc_bytes);
+        }
 
         // Two times of progress bar
         // 1. Update the user interactively, time left, TPS -- based on time elapsed
@@ -255,6 +401,11 @@ fn run(
             // Record time taken in this part of loop so that we can offset it from block population
             let hover_start = Instant::now();
             results.log_system_stats();
+
+            // ===== VVV TIMESTAMP 2 (Hover Start) VVV =====
+            println!("Timestamp: {}", Utc::now().to_rfc3339());
+            // ===== ^^^ TIMESTAMP ^^^ =====
+            
             run_hover_tasks(
                 table_id,
                 randsrc,
@@ -264,6 +415,9 @@ fn run(
                 hover_write_block,
                 num_read_latency_samples,
                 results,
+                &mut last_snapshot_time,
+                &mut last_user_bytes,
+                &mut last_gc_bytes,
             );
 
             println!("Writing partial results to file: {}", output_filename);
@@ -291,6 +445,10 @@ fn run(
         tps_blocks
     );
 
+    // ===== VVV TIMESTAMP 7 (TPS Start) VVV =====
+    println!("Timestamp: {}", Utc::now().to_rfc3339());
+    // ===== ^^^ TIMESTAMP ^^^ =====
+
     // Benchmarking TPS
     let tps_start = Instant::now();
     let mut transactions_performed: u64 = 0;
@@ -304,6 +462,11 @@ fn run(
         transactions_performed += task_count as u64;
         // TODO: Progress update with generated_blocks
     }
+
+    // ===== VVV TIMESTAMP 6 (TPS End) VVV =====
+    println!("Timestamp: {}", Utc::now().to_rfc3339());
+    // ===== ^^^ TIMESTAMP ^^^ =====
+
     results.record_throughput_as_total("transactions", transactions_performed, tps_start.elapsed());
     results.log_system_stats();
     println!("Benchmarking completed successfully");
@@ -322,6 +485,54 @@ fn run(
     results.write_to_file(output_filename);
 }
 
+/// 打印 IO_STAT，并更新 last_snapshot_time / last_user_bytes / last_gc_bytes
+pub fn log_io_stat(
+    height: i64,
+    last_snapshot_time: &mut Instant,
+    last_user_bytes: &mut u64,
+    last_gc_bytes: &mut u64,
+) {
+    // 计算时间间隔
+    let now = Instant::now();
+    let elapsed = now.duration_since(*last_snapshot_time).as_secs_f64();
+    if elapsed <= 0.0 {
+        return;
+    }
+
+    // 读取当前 metrics 快照
+    let curr_metrics = metrics::get_all_counters();
+
+    // 计算增量
+    let delta_user = curr_metrics.physical_write_bytes_user.saturating_sub(*last_user_bytes);
+    let delta_gc = curr_metrics.physical_write_bytes_gc.saturating_sub(*last_gc_bytes);
+    let delta_total = delta_user.saturating_add(delta_gc);
+
+    // 计算 MB/s
+    let user_mbps = (delta_user as f64) / 1024.0 / 1024.0 / elapsed;
+    let gc_mbps = (delta_gc as f64) / 1024.0 / 1024.0 / elapsed;
+    let total_mbps = (delta_total as f64) / 1024.0 / 1024.0 / elapsed;
+
+    // 计算 WA（写放大）
+    let wa = if user_mbps > 0.0 { total_mbps / user_mbps } else { 0.0 };
+
+    println!(
+        "IO_STAT: Height={} Time={} UserWrite={:.2} MB/s GC_Move={:.2} MB/s Total={:.2} MB/s WA={:.2}",
+        height,
+        Utc::now().to_rfc3339(),
+        user_mbps,
+        gc_mbps,
+        total_mbps,
+        wa
+    );
+
+    // 更新快照
+    *last_snapshot_time = now;
+    *last_user_bytes = curr_metrics.physical_write_bytes_user;
+    *last_gc_bytes = curr_metrics.physical_write_bytes_gc;
+}
+
+
+
 fn run_hover_tasks(
     table_id: usize,
     randsrc: &mut RandSrc,
@@ -331,6 +542,9 @@ fn run_hover_tasks(
     hover_write_block: u64,
     num_read_latency_samples: u64,
     results: &mut BenchmarkResults,
+    last_snapshot_time: &mut Instant,
+    last_user_bytes: &mut u64,
+    last_gc_bytes: &mut u64,
 ) {
     let op_in_blk = test_gen.num_op_in_blk();
 
@@ -342,6 +556,9 @@ fn run_hover_tasks(
 
     if hover_recreate_block * op_in_blk < max_num {
         let stride: u64 = (max_num / (op_in_blk * hover_recreate_block)) * PRIME1;
+        
+        // --- Deletes ---
+        println!("IO_SNAPSHOT: phase_start=deletes counters={}", serde_json::to_string(&metrics::get_all_counters()).unwrap());
         hover_execute_op(
             table_id,
             "deletes",
@@ -354,7 +571,17 @@ fn run_hover_tasks(
             height,
             randsrc,
             results,
+            last_snapshot_time,
+            last_user_bytes,
+            last_gc_bytes,
         );
+        println!("IO_SNAPSHOT: phase_end=deletes counters={}", serde_json::to_string(&metrics::get_all_counters()).unwrap());
+        // ===== VVV TIMESTAMP 3 (Delete End) VVV =====
+        println!("Timestamp: {}", Utc::now().to_rfc3339());
+        // ===== ^^^ TIMESTAMP ^^^ =====
+
+        // --- Inserts ---
+        println!("IO_SNAPSHOT: phase_start=inserts counters={}", serde_json::to_string(&metrics::get_all_counters()).unwrap());
         hover_execute_op(
             table_id,
             "inserts",
@@ -367,10 +594,21 @@ fn run_hover_tasks(
             height,
             randsrc,
             results,
+            last_snapshot_time,
+            last_user_bytes,
+            last_gc_bytes,
         );
+        println!("IO_SNAPSHOT: phase_end=inserts counters={}", serde_json::to_string(&metrics::get_all_counters()).unwrap());
+        // ===== VVV TIMESTAMP 4 (Insert End) VVV =====
+        println!("Timestamp: {}", Utc::now().to_rfc3339());
+        // ===== ^^^ TIMESTAMP ^^^ =====
+
     } else {
         println!("skip hover delete and recreate blocks");
     }
+
+    // --- Updates ---
+    println!("IO_SNAPSHOT: phase_start=updates counters={}", serde_json::to_string(&metrics::get_all_counters()).unwrap());
     hover_execute_op(
         table_id,
         "updates",
@@ -383,8 +621,22 @@ fn run_hover_tasks(
         height,
         randsrc,
         results,
+        last_snapshot_time,
+        last_user_bytes,
+        last_gc_bytes,
     );
+    println!("IO_SNAPSHOT: phase_end=updates counters={}", serde_json::to_string(&metrics::get_all_counters()).unwrap());
 
+    // ===== VVV TIMESTAMP 5 (Write End) VVV =====
+    println!("Timestamp: {}", Utc::now().to_rfc3339());
+    // ===== ^^^ TIMESTAMP ^^^ =====
+    // 打印并重置 "updates" 阶段的延迟
+    // qmdb::metrics::reset_and_print_write_latency("updates");
+
+
+    // --- Reads ---
+    println!("IO_SNAPSHOT: phase_start=reads counters={}", serde_json::to_string(&metrics::get_all_counters()).unwrap());
+    
     hover_execute_op(
         table_id,
         "reads",
@@ -397,15 +649,25 @@ fn run_hover_tasks(
         height,
         randsrc,
         results,
+        last_snapshot_time,
+        last_user_bytes,
+        last_gc_bytes,
     );
 
-    //measure_read_latency(
-    //    table_id,
-    //    max_num,
-    //    randsrc,
-    //    results,
-    //    num_read_latency_samples,
-    //);
+    // ===== VVV TIMESTAMP 6 (Read End) VVV =====
+    println!("Timestamp: {}", Utc::now().to_rfc3339());
+    // ===== ^^^ TIMESTAMP ^^^ =====
+
+    // 2. 取消注释这个块 (同步延迟测量):
+    measure_read_latency(
+        table_id,
+        max_num,
+        randsrc,
+        results,
+        num_read_latency_samples,
+    );
+
+    println!("IO_SNAPSHOT: phase_end=reads counters={}", serde_json::to_string(&metrics::get_all_counters()).unwrap());
 }
 
 fn hover_execute_op(
@@ -420,6 +682,9 @@ fn hover_execute_op(
     height: &mut i64,
     randsrc: &mut RandSrc,
     results: &mut BenchmarkResults,
+    last_snapshot_time: &mut Instant,
+    last_user_bytes: &mut u64,
+    last_gc_bytes: &mut u64,
 ) {
     let bm_start = Instant::now();
     print!(
@@ -457,6 +722,15 @@ fn hover_execute_op(
         if i % 10 == 5 {
             println!("hover {} {} (partial)", operation_name, i);
         }
+
+        if i % 2 == 0 {
+        log_io_stat(
+            *height,
+            last_snapshot_time,
+            last_user_bytes,
+            last_gc_bytes,
+        );
+    }
     }
     results.record_throughput(operation_name, block_count * op_in_blk, bm_start.elapsed());
 }
@@ -527,6 +801,7 @@ fn measure_read_latency(
         let duration = start.elapsed();
         latency.record(duration);
     }
+    println!(); // <--- 添加一个换行符，使日志更清晰
 
     if let Some(stats) = latency.detailed_stats() {
         stats.print("Read", true);
