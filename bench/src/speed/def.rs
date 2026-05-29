@@ -11,9 +11,6 @@ pub const L: usize = 16;
 // pub const HOVER_RECREATE_BLOCK: u64 = 100;
 // pub const HOVER_WRITE_BLOCK: u64 = 100;
 
-#[cfg(not(target_env = "msvc"))]
-use tikv_jemallocator::Jemalloc;
-
-#[cfg(not(target_env = "msvc"))]
+#[cfg(target_os = "linux")]
 #[global_allocator]
-static GLOBAL: Jemalloc = Jemalloc;
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;

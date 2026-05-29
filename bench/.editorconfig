@@ -1,0 +1,17 @@
+root = true
+
+[*]
+charset = utf-8
+
+[Makefile*]
+indent_style = tab
+
+[Dockerfile]
+indent_style = tab
+
+[Dockerfile.**]
+indent_style = tab
+
+[install-dependencies]
+indent_style = space
+indent_size = 4

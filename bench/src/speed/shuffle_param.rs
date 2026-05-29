@@ -1,5 +1,4 @@
 use byteorder::{BigEndian, ByteOrder};
-use qmdb::utils::hasher;
 
 #[derive(Debug, Clone)]
 pub struct ShuffleParam {
@@ -33,7 +32,7 @@ impl ShuffleParam {
 
         let mut buf = [0u8; 8];
         BigEndian::write_u64(&mut buf[..8], x);
-        let hash = hasher::hash(&buf[..]);
+        let hash = qmdb_common::entryfile::entry::entry_key_hash(&buf[..]);
         x = BigEndian::read_u64(&hash[..8]);
 
         x % self.entry_count_wo_del
