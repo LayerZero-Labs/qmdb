@@ -3,7 +3,7 @@ QMDB_DIR=${1:-/tmp/QMDB}
 ENTRY_COUNT=${2:-7000000000}
 # Create randsrc if it doesn't exist
 if [ ! -f randsrc.dat ]; then
-    head -c 10M </dev/urandom > randsrc.dat
+    head -c 10M < /dev/urandom > randsrc.dat
 fi
 
 if [ ! -d $QMDB_DIR ]; then

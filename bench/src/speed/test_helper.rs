@@ -1,17 +1,15 @@
 use super::def::{L, PAGE_SIZE};
 use byteorder::{BigEndian, ByteOrder};
 use parking_lot::RwLock;
-use qmdb::{
-    def::{OP_WRITE, SHARD_COUNT},
-    indexer::Indexer,
-    tasks::Task,
-    test_helper::SimpleTask,
-};
+use qmdb::{indexer::Indexer, test_helper::SimpleTask};
+use qmdb_common::def::{OP_WRITE, SHARD_COUNT};
+use qmdb_common::indexer::indexer_trait::IndexerTrait;
+use qmdb_common::task::task::Task;
 use std::sync::Arc;
 use std::{fs::File, os::unix::fs::FileExt};
 
 #[allow(dead_code)]
-fn fake_indexer(file: &Arc<File>, page_count: u64, task_list: &Vec<RwLock<Option<SimpleTask>>>) {
+fn fake_indexer(file: &Arc<File>, page_count: u64, task_list: &[RwLock<Option<SimpleTask>>]) {
     rayon::scope(|s| {
         for item in task_list.iter() {
             let task_opt = item.read();
@@ -37,11 +35,7 @@ fn fake_indexer(file: &Arc<File>, page_count: u64, task_list: &Vec<RwLock<Option
 }
 
 #[allow(dead_code)]
-fn warmup_indexer(
-    indexer: &Arc<Indexer>,
-    height: i64,
-    task_list: &Vec<RwLock<Option<SimpleTask>>>,
-) {
+fn warmup_indexer(indexer: &Arc<Indexer>, height: i64, task_list: &[RwLock<Option<SimpleTask>>]) {
     rayon::scope(|s| {
         for item in task_list.iter() {
             let task_opt = item.read();
@@ -52,9 +46,7 @@ fn warmup_indexer(
                         let kh = *key_hash;
                         let idx = indexer.clone();
                         s.spawn(move |_| {
-                            idx.for_each(height, op, &kh[..], |_k, _off| -> bool {
-                                false // do not exit loop
-                            });
+                            let _ = idx.for_each(height, op, &kh[..]);
                         });
                     });
                 }

@@ -218,7 +218,7 @@ impl DetailedStats {
                 name, self.mean, self.min, self.p10, self.p20, self.p25, self.p30, self.p40, self.p50,
                 self.p60, self.p70, self.p75, self.p80, self.p90, self.p95, self.p99, self.p999, self.p9999, self.max);
         } else {
-            println!("{} Latency Statistics:", name);
+            println!("{name} Latency Statistics:");
             println!("  Sample count: {}", self.count);
             println!("  Min:   {:?}", self.min);
             println!("  Max:   {:?}", self.max);
