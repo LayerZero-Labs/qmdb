@@ -2,30 +2,32 @@
 name = "bench"
 version = "0.1.0"
 edition = "2021"
-
+publish = false
 [dependencies]
-qmdb = { path = "../qmdb" }
-reth-libmdbx = { tag = "v1.1.2", git = "https://github.com/paradigmxyz/reth.git"}
-byteorder = "1.5.0"
-threadpool = "1.8.1"
-rayon = "1.10.0"
-parking_lot = { version = "0.12.3", features = ["arc_lock"] }
-rocksdb = "0.22.0"
-memory-stats = "1.2.0"
-clap = { version = "4.0", features = ["derive"] }
-serde = { version = "1.0", features = ["derive"] }
-chrono = { version = "0.4", features = ["serde"] }
-serde_json = "1.0"
-log = "0.4"
-
-[dev-dependencies]
-criterion = "0.5"
-
-[target.'cfg(not(target_env = "msvc"))'.dependencies]
-tikv-jemallocator = "0.6.0"
+qmdb = { workspace = true, default-features = true }
+reth-libmdbx = { workspace = true }
+byteorder = { workspace = true }
+threadpool = { workspace = true }
+rayon = { workspace = true }
+parking_lot = { workspace = true, features = ["arc_lock"] }
+rocksdb = { workspace = true }
+memory-stats = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+serde = { workspace = true, features = ["derive"] }
+chrono = { workspace = true, features = ["serde"] }
+serde_json = { workspace = true, features = ["std"] }
+hex = { workspace = true }
+log = { workspace = true }
+once_cell = { workspace = true }
+qmdb-common = { workspace = true }
+crossbeam = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procfs = { version = "0.17", features = ["serde1", "chrono"] }
+tikv-jemallocator = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
 
 [[bin]]
 name = "speed"
@@ -34,4 +36,4 @@ name = "speed"
 default = []
 use_mdbx = []
 use_rocksdb = []
-directio = ["qmdb/directio"]
+qmdb_bench_correctness = []

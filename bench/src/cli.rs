@@ -33,6 +33,12 @@ pub struct Cli {
     /// Number of blocks to run TPS benchmarks
     #[arg(long, default_value_t = if cfg!(debug_assertions) { 10 } else { 50 })]
     pub tps_blocks: u64,
+
+    /// Enable lightweight correctness checking (bitmap model + sampling).
+    /// Only available when the `qmdb_bench_correctness` feature is enabled.
+    #[cfg(feature = "qmdb_bench_correctness")]
+    #[arg(long, default_value_t = false)]
+    pub check_correctness: bool,
 }
 
 #[derive(Args, Debug, Serialize, Clone)]

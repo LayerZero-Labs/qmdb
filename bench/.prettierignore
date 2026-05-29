@@ -1,0 +1,43 @@
+# Build output
+dist/
+build/
+
+# Dependencies
+node_modules/
+
+# Cache directories
+.cache/
+.next/
+.turbo/
+
+# Coverage reports
+coverage/
+
+# Rust specific
+target/
+Cargo.lock
+
+# Generated files
+*.generated.*
+*.gen.*
+
+# Logs
+*.log
+
+# Environment files
+.env*
+!.env.example
+
+# Yarn release files
+.yarn/releases/
+
+# Dockerfiles
+Dockerfile
+Dockerfile.*
+
+# Lock files
+package-lock.json
+yarn.lock
+
+# Patches
+patches/

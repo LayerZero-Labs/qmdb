@@ -1,15 +1,18 @@
 # Benchmarking QMDB
 
-The benchmark utility `speed` is used to benchmark QMDB. It is a command line tool that runs the benchmark and outputs the results to a JSON file.
+The benchmark utility `speed` is used to benchmark QMDB. It is a command line tool that runs the benchmark and outputs
+the results to a JSON file.
 
-**Quick start**: run the benchmark with `./run.sh`, which contains default parameters and assumes your SSD is mounted at `/mnt/nvme`.
+**Quick start**: run the benchmark with `./run.sh`, which contains default parameters and assumes your SSD is mounted at
+`/mnt/nvme`.
 
 ## Initial setup
 
-QMDB requires a source of entropy to generate the workload. We recommend generating this once for ease of debugging and reproduction. You can use any large file, or generate it from `/dev/urandom`:
+QMDB requires a source of entropy to generate the workload. We recommend generating this once for ease of debugging and
+reproduction. You can use any large file, or generate it from `/dev/urandom`:
 
 ```bash
-head -c 10M </dev/urandom > randsrc.dat
+head -c 10M < /dev/urandom > randsrc.dat
 ```
 
 ## Running the benchmark (speed)
@@ -39,19 +42,23 @@ We document key arguments to the benchmarking utility `speed` here. Refer to `sr
 ### Essential arguments to provide values for
 
 - **`entry_count`**: Number of entries to populate the database with. Default is 500 million.
-- **`db_dir`**: Directory to store the database's persistent files. You should set this to a directory on your SSD, e.g., `/mnt/nvme/QMDB`. Default is `/tmp/QMDB`.
+- **`db_dir`**: Directory to store the database's persistent files. You should set this to a directory on your SSD,
+  e.g., `/mnt/nvme/QMDB`. Default is `/tmp/QMDB`.
 - **`output_filename`**: Output file for benchmark results. Default is `results.json`.
 - **`randsrc_filename`**: Source of randomness for workload generation. Default is `./randsrc.dat`.
 
 ### Benchmarking workload
 
-These argments control the workload and can be adjusted accordingly or left as the default. QMDB supports pack multiple transactions into one task, although its clients usually only have one transaction in a task. "Hover tasks" in the code refers to benchmarking tasks run periodically during the population of the database.
+These argments control the workload and can be adjusted accordingly or left as the default. QMDB supports pack multiple
+transactions into one task, although its clients usually only have one transaction in a task. "Hover tasks" in the code
+refers to benchmarking tasks run periodically during the population of the database.
 
 - **`ops_per_block`**: Target number of operations per block. Default is 100,000.
 - **`hover_interval`**: Interval (in blocks) between benchmarking tasks. Default is 10,000 blocks in release mode.
 - **`hover_recreate_block`**: Number of blocks to insert during benchmarking. Default is 50 blocks in release mode.
 - **`hover_write_block`**: Number of blocks to write during benchmarking. Default is 50 blocks in release mode.
-- **`tps_blocks`**: When benchmarking transactions per second (TPS), this sets the number of blocks to run. Default is 50 in release mode.
+- **`tps_blocks`**: When benchmarking transactions per second (TPS), this sets the number of blocks to run. Default is
+  50 in release mode.
 - **`changesets_per_task`**: Number of changesets per task. Each changeset corresponds to a transaction. Default is 2.
 
 ## Troubleshooting

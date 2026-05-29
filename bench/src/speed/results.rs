@@ -190,7 +190,7 @@ impl BenchmarkResults {
         self.summary.clear();
         for (key, value) in &self.tputs {
             self.summary.insert(
-                format!("{}.throughput_per_sec", key),
+                format!("{key}.throughput_per_sec"),
                 value.get_last_throughput(),
             );
         }
@@ -211,10 +211,10 @@ impl BenchmarkResults {
         match std::fs::File::create(filename) {
             Ok(file) => {
                 if let Err(e) = serde_json::to_writer_pretty(file, self) {
-                    eprintln!("Failed to write results to file: {}", e);
+                    eprintln!("Failed to write results to file: {e}");
                 }
             }
-            Err(e) => eprintln!("Failed to create file: {}", e),
+            Err(e) => eprintln!("Failed to create file: {e}"),
         }
     }
 
@@ -279,7 +279,7 @@ impl BenchmarkResults {
         {
             Ok(output) => output.stdout,
             Err(e) => {
-                eprintln!("Failed to run 'du' command: {}", e);
+                eprintln!("Failed to run 'du' command: {e}");
                 return;
             }
         };
@@ -313,11 +313,11 @@ impl BenchmarkResults {
         // write_bytes: 3542319104
         // cancelled_write_bytes: 719708160
         let pid: u32 = std::process::id();
-        let io_path = format!("/proc/{}/io", pid);
+        let io_path = format!("/proc/{pid}/io");
         let io_contents = match std::fs::read_to_string(&io_path) {
             Ok(contents) => contents,
             Err(e) => {
-                eprintln!("Failed to read {}: {}", io_path, e);
+                eprintln!("Failed to read {io_path}: {e}");
                 return;
             }
         };
@@ -328,11 +328,11 @@ impl BenchmarkResults {
             let value = match parts[1].parse::<u64>() {
                 Ok(val) => val,
                 Err(e) => {
-                    eprintln!("Failed to parse value in line '{}': {}", line, e);
+                    eprintln!("Failed to parse value in line '{line}': {e}");
                     continue;
                 }
             };
-            self.log_sample(&format!("iostats.{}", key), value as f64);
+            self.log_sample(&format!("iostats.{key}"), value as f64);
         }
     }
 
@@ -342,7 +342,7 @@ impl BenchmarkResults {
         let diskstats = match procfs::diskstats() {
             Ok(stats) => stats,
             Err(e) => {
-                eprintln!("Failed to read disk stats: {}", e);
+                eprintln!("Failed to read disk stats: {e}");
                 return;
             }
         };
@@ -393,7 +393,7 @@ impl BenchmarkResults {
         let process = match procfs::process::Process::new(pid as i32) {
             Ok(proc) => proc,
             Err(e) => {
-                eprintln!("Failed to get process info: {}", e);
+                eprintln!("Failed to get process info: {e}");
                 return;
             }
         };
@@ -401,7 +401,7 @@ impl BenchmarkResults {
         let stat = match process.stat() {
             Ok(stat) => stat,
             Err(e) => {
-                eprintln!("Failed to get process stat: {}", e);
+                eprintln!("Failed to get process stat: {e}");
                 return;
             }
         };
@@ -475,7 +475,7 @@ impl BenchmarkResults {
             let msg: String = if name == "block_population" {
                 "populate DB with entries".to_string()
             } else {
-                format!("benchmark {}", name)
+                format!("benchmark {name}")
             };
             println!(
                 " - Time to {}: {:.3?}",
@@ -487,8 +487,7 @@ impl BenchmarkResults {
         let total_samples: usize = latency.get_total_samples();
         let total_latency = latency.get_total_latency();
         println!(
-            " - Time taken to benchmark read latency: {:.3?} ({} samples)",
-            total_latency, total_samples
+            " - Time taken to benchmark read latency: {total_latency:.3?} ({total_samples} samples)"
         );
 
         println!("Results summary");
