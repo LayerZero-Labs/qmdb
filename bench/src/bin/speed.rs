@@ -169,7 +169,7 @@ fn main() {
 
     // ########### Initialize Database ###########
     // Make db_dir if it does not exist
-    let is_eth_mode = args.eth_trace_dir.is_some();
+    let is_eth_mode = args.eth_trace_dir.is_some() || args.init_db_path.is_some();
     std::fs::create_dir_all(args.db_dir.as_str()).unwrap();
     // Initialize the metrics-log sink and resolve the OS-physical-R/W disk from
     // db_dir (single source: one --db-dir drives DB path + I/O counters).
@@ -184,7 +184,27 @@ fn main() {
     thread::sleep(Duration::from_secs(15));
 
     // ########### Start Benchmark ###########
-    if let Some(ref path) = args.eth_trace_dir {
+    if let Some(ref bundle_path) = args.init_db_path {
+        // Real Ethereum workload, but Phase 1 loads a pre-computed InitDbBundle
+        // (init_db + boundary_ops) instead of regenerating it from traces.
+        // --eth-trace-dir is still required: Phase 3 streams replay ops from it.
+        let replay_start = if args.eth_replay_start_height == 0 { args.eth_start_height } else { args.eth_replay_start_height };
+        let replay_end   = if args.eth_replay_end_height   == 0 { args.eth_end_height   } else { args.eth_replay_end_height   };
+        println!(
+            "Real Ethereum Workload Mode (from bundle):\n  Bundle path: {}\n  Replay start: {}\n  Replay end: {}",
+            bundle_path, replay_start, replay_end,
+        );
+        let trace_dir = args.eth_trace_dir.as_deref()
+            .expect("--eth-trace-dir is required even in bundle mode (used for Phase 3 replay ops)");
+        run_eth_replay_from_bundle(
+            table_id,
+            bundle_path,
+            trace_dir,
+            replay_start,
+            replay_end,
+            &mut results,
+        );
+    } else if let Some(ref path) = args.eth_trace_dir {
         println!(
             "Real Ethereum Workload Mode:\n  Ethereum workload path: {}\n  Start block: {}\n  End block: {}",
             path,
@@ -1413,6 +1433,390 @@ fn run_eth_replay_mode(
         let mut current_batch_keys: HashSet<Vec<u8>> = HashSet::new(); // 保留防冲突机制
 
         for (h, ops_opt) in replay_blocks.into_iter() {
+            let current_boundary_ops = boundary_ops.get(&h);
+            
+            if ops_opt.is_none() && current_boundary_ops.is_none() { continue; }
+
+            let mut process_op = |op: &eth_replay_kv::Operation| {
+                let (op_code, key_ref, val_ref) = match op {
+                    eth_replay_kv::Operation::Create(k, v) => (OP_CREATE, k, Some(v)),
+                    eth_replay_kv::Operation::Update(k, v) => (OP_WRITE, k, Some(v)),
+                    eth_replay_kv::Operation::Delete(k)    => (OP_DELETE, k, None),
+                    eth_replay_kv::Operation::Read(k, v)   => (OP_READ, k, Some(v)), 
+                };
+
+                // 【切分逻辑 1】：防 Key 冲突 (真实 ETH 数据必须要有，否则会 Panic/错误)
+                if current_batch_keys.contains(key_ref) {
+                    current_cset.sort();
+                    cset_list.push(std::mem::replace(&mut current_cset, ChangeSet::new()));
+                    current_batch_keys.clear();
+                    
+                    if cset_list.len() >= csets_per_task {
+                        let task = SimpleTask::new(std::mem::replace(&mut cset_list, Vec::with_capacity(csets_per_task)));
+                        task_list.push(parking_lot::RwLock::new(Some(task)));
+                    }
+                }
+
+                let kh = qmdb_common::entryfile::entry::entry_key_hash(key_ref);
+                let val_slice = val_ref.map(|v| v.as_slice()).unwrap_or(&[]);
+                current_cset.add_op(op_code, &kh, key_ref, val_slice, None);
+                current_batch_keys.insert(key_ref.clone());
+                
+                total_ops += 1;
+                interval_ops += 1;
+
+                // 【切分逻辑 2】：正常达到 10 ops 的阈值
+                if current_cset.op_list.len() >= ops_per_cset {
+                    current_cset.sort();
+                    cset_list.push(std::mem::replace(&mut current_cset, ChangeSet::new()));
+                    current_batch_keys.clear();
+
+                    if cset_list.len() >= csets_per_task {
+                        let task = SimpleTask::new(std::mem::replace(&mut cset_list, Vec::with_capacity(csets_per_task)));
+                        task_list.push(parking_lot::RwLock::new(Some(task)));
+                    }
+                }
+            };
+
+            // 执行操作装配
+            if let Some(b_ops) = current_boundary_ops {
+                for op in b_ops { process_op(op); }
+            }
+            if let Some(ops) = ops_opt {
+                for op in &ops { process_op(op); }
+            }
+
+            eth_block_counter += 1;
+            processed_eth_blocks += 1;
+
+            // 【打包逻辑】：如果凑够了 N 个 ETH Block，则推入 DB 执行通道
+            if eth_block_counter >= eth_blocks_per_db_block {
+                // 清理并压入最后没装满的 cset 和 task
+                if !current_cset.op_list.is_empty() {
+                    current_cset.sort();
+                    cset_list.push(std::mem::replace(&mut current_cset, ChangeSet::new()));
+                    current_batch_keys.clear();
+                }
+                if !cset_list.is_empty() {
+                    let task = SimpleTask::new(std::mem::replace(&mut cset_list, Vec::with_capacity(csets_per_task)));
+                    task_list.push(parking_lot::RwLock::new(Some(task)));
+                }
+
+                if !task_list.is_empty() {
+                    // 发送给官方的 consumer 线程处理
+                    vprintln!("PIPELINE_LOG: CLIENT_GENERATE_END height={} timestamp={}",
+                        global_db_height,
+                        Utc::now().to_rfc3339()
+                    );
+                    db_tx.send((global_db_height as i64, std::mem::replace(&mut task_list, Vec::new()))).unwrap();
+                    global_db_height += 1;
+                    vprintln!("PIPELINE_LOG: CLIENT_GENERATE_START height={} timestamp={}",
+                        global_db_height,
+                        Utc::now().to_rfc3339()
+                    );
+                }
+                eth_block_counter = 0;
+            }
+
+            // 保持原本的统计打印节奏
+            if interval_start.elapsed().as_secs() >= 3 {
+                let elapsed = interval_start.elapsed().as_secs_f64();
+                let progress = (processed_eth_blocks as f64 / total_blocks as f64) * 100.0;
+                println!("Replay [{:.1}%] Block {} | TPS: {:.0} ops/s", progress, h, interval_ops as f64 / elapsed);
+                interval_start = Instant::now();
+                interval_ops = 0;
+            }
+        }
+
+        vprintln!("PIPELINE_LOG: CLIENT_GENERATE_END height={} timestamp={}",
+            global_db_height,
+            Utc::now().to_rfc3339()
+        );
+        // 循环结束：处理尾部残余数据并发送
+        if !current_cset.op_list.is_empty() {
+            current_cset.sort();
+            cset_list.push(current_cset);
+        }
+        if !cset_list.is_empty() {
+            task_list.push(parking_lot::RwLock::new(Some(SimpleTask::new(cset_list))));
+        }
+        if !task_list.is_empty() {
+            db_tx.send((global_db_height as i64, task_list)).unwrap();
+            global_db_height += 1;
+        }
+    });
+
+    // 4. 等待队列处理完毕 (完全复刻官方行为)
+    drop(db_tx); 
+    consumer_handle.join().unwrap();
+
+    let total_duration = bench_start.elapsed();
+    println!("Benchmark Finished.");
+    println!("Total Ops: {}", total_ops);
+    println!("Duration: {:.2}s", total_duration.as_secs_f64());
+    
+    results.record_throughput_as_total("eth_replay_ops", total_ops, total_duration);
+}
+
+fn run_eth_replay_from_bundle(
+    table_id: usize,
+    bundle_path: &str,
+    trace_dir: &str,
+    replay_start: u64,
+    replay_end: u64,
+    results: &mut BenchmarkResults,
+) {
+    run_eth_replay_inner(
+        table_id, Some(trace_dir), Some(bundle_path),
+        0, 0, replay_start, replay_end, results,
+    );
+}
+
+fn run_eth_replay_inner(
+    table_id: usize,
+    input_dir: Option<&str>,
+    bundle_path: Option<&str>,
+    populate_start: u64,
+    populate_end: u64,
+    replay_start: u64,
+    replay_end: u64,
+    results: &mut BenchmarkResults,
+) {
+    let start_height = populate_start;
+    let end_height = populate_end;
+    println!("Running Real Ethereum Workload");
+    if let Some(p) = bundle_path { println!("Mode: bundle  path={}", p); }
+    else { println!("Mode: trace  Populate Range: Block {} to {}", populate_start, populate_end); }
+    println!("Replay   Range: Block {} to {}", replay_start, replay_end);
+
+    let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
+    let source = input_dir.map(eth_replay_kv::parse_storage_path);
+    let s3_client = if source.as_ref().map_or(false, |s| s.is_s3()) {
+        Some(rt.block_on(eth_replay_kv::new_s3_client()))
+    } else {
+        None
+    };
+
+    let mut global_db_height: i64 = 1;
+
+    // =========================================================
+    // Phase 1: produce (init_db, boundary_ops) — either from bundle or from trace
+    // =========================================================
+    let (init_db, mut boundary_ops): (Vec<(Vec<u8>, Vec<u8>)>, std::collections::HashMap<u64, Vec<eth_replay_kv::Operation>>) = if let Some(bp) = bundle_path {
+        println!("\n=== Phase 1: Loading InitDbBundle from {} ===", bp);
+        let t0 = std::time::Instant::now();
+        let f = std::fs::File::open(bp).expect("open bundle file");
+        let r = std::io::BufReader::with_capacity(64 * 1024 * 1024, f);
+        let bundle: eth_replay_kv::InitDbBundle = bincode::deserialize_from(r)
+            .expect("bincode deserialize InitDbBundle");
+        println!("Bundle loaded in {:.1}s  populate=[{},{}]  init_db={}  boundary_blocks={}",
+            t0.elapsed().as_secs_f64(),
+            bundle.populate_start, bundle.populate_end,
+            bundle.init_db.len(), bundle.boundary_ops.len());
+        (bundle.init_db, bundle.boundary_ops)
+    } else {
+        println!("\n=== Phase 1: Populating Base State (from trace) ===");
+        let source = source.clone().expect("source required when bundle not given");
+        let (tx_p1, mut rx_p1) = tokio::sync::mpsc::channel(eth_replay_kv::PREFETCH_BUFFER_BLOCKS);
+        let source_clone_p1 = source.clone();
+        let client_clone_p1 = s3_client.clone();
+        rt.spawn(async move {
+            eth_replay_kv::run_block_data_producer(start_height, end_height, source_clone_p1, client_clone_p1, tx_p1).await
+        });
+        let mut splitter = eth_replay_kv::BaseStateSplitter::new();
+        rt.block_on(async {
+            while let Some(msg) = rx_p1.recv().await {
+                let (height, base_kv_opt, ops_opt) = msg.expect("Failed to receive from producer");
+                if let Some(b) = base_kv_opt {
+                    splitter.ingest_base_kv(height, b);
+                }
+                if let Some(o) = ops_opt {
+                    splitter.apply_ops(o);
+                }
+            }
+        });
+        let (hm, bops) = splitter.into_parts();
+        (hm.into_iter().collect(), bops)
+    };
+    println!("init_db size: {}, boundary blocks: {}", init_db.len(), boundary_ops.len());
+
+    // =========================================================
+    // Phase 2: 将init db内存版本populate到DB
+    // =========================================================
+    let mut total_init_entries = 0;
+    let ops_per_block = 100000;
+    let ops_per_cset = 10;
+    let csets_per_task = 2;
+    let tasks_per_block = ops_per_block / (ops_per_cset * csets_per_task);
+
+    let mut current_cset = ChangeSet::new();
+    let mut current_cset_list: Vec<ChangeSet> = Vec::with_capacity(csets_per_task);
+    let mut batch_tasks: Vec<parking_lot::RwLock<Option<SimpleTask>>> = Vec::with_capacity(tasks_per_block);
+
+    for (k, v) in init_db {
+        if v.is_empty() {
+            println!("Empty value for key: {:?}", k);
+            continue;
+        }
+
+        let kh = qmdb_common::entryfile::entry::entry_key_hash(&k);
+        current_cset.add_op(OP_CREATE, &kh, &k, &v, None);
+        total_init_entries += 1;
+
+        // 1. 检查 ChangeSet 是否已满 (达到 10 ops)
+        if current_cset.op_list.len() >= ops_per_cset {
+            current_cset.sort();
+            current_cset_list.push(current_cset);
+            current_cset = ChangeSet::new(); // 重置当前 ChangeSet
+
+            // 2. 检查 Task 是否已满 (达到 2 csets)
+            if current_cset_list.len() >= csets_per_task {
+                let task = SimpleTask::new(current_cset_list);
+                batch_tasks.push(parking_lot::RwLock::new(Some(task)));
+                current_cset_list = Vec::with_capacity(csets_per_task); // 重置当前 Task 的 cset 列表
+
+                // 3. 检查 Block 是否已满 (达到 5000 tasks，即 100,000 ops)
+                if batch_tasks.len() >= tasks_per_block {
+                    vprintln!("PIPELINE_LOG: CLIENT_GENERATE_END height={} timestamp={}",
+                        global_db_height,
+                        Utc::now().to_rfc3339()
+                    );
+                    vprintln!("PIPELINE_LOG: CLIENT_SUBMIT_START height={} timestamp={}",
+                        global_db_height,
+                        Utc::now().to_rfc3339()
+                    );
+                    db_backend::create_kv(table_id, global_db_height, batch_tasks);
+                    vprintln!("PIPELINE_LOG: CLIENT_SUBMIT_END height={} timestamp={}",
+                        global_db_height,
+                        Utc::now().to_rfc3339()
+                    );
+                    global_db_height += 1;
+                    batch_tasks = Vec::with_capacity(tasks_per_block); // 重置当前 Block
+                    vprintln!("PIPELINE_LOG: CLIENT_GENERATE_START height={} timestamp={}",
+                        global_db_height,
+                        Utc::now().to_rfc3339()
+                    );
+                }
+            }
+        }
+    }
+
+    // --- 处理尾部残留的数据 (Flush Remaining) ---
+    // 凡是没有凑够整齐配置的尾部数据，都需要在循环结束后强制打包落盘
+    
+    if !current_cset.op_list.is_empty() {
+        current_cset.sort();
+        current_cset_list.push(current_cset);
+    }
+    
+    if !current_cset_list.is_empty() {
+        let task = SimpleTask::new(current_cset_list);
+        batch_tasks.push(parking_lot::RwLock::new(Some(task)));
+    }
+    
+    vprintln!("PIPELINE_LOG: CLIENT_GENERATE_END height={} timestamp={}",
+        global_db_height,
+        Utc::now().to_rfc3339()
+    );
+    if !batch_tasks.is_empty() {
+        vprintln!("PIPELINE_LOG: CLIENT_SUBMIT_START height={} timestamp={}",
+            global_db_height,
+            Utc::now().to_rfc3339()
+        );
+        db_backend::create_kv(table_id, global_db_height, batch_tasks);
+        vprintln!("PIPELINE_LOG: CLIENT_SUBMIT_END height={} timestamp={}",
+            global_db_height,
+            Utc::now().to_rfc3339()
+        );        
+        global_db_height += 1;
+    }
+
+    db_backend::flush(table_id);
+    println!("Total Entries Initialized: {}", total_init_entries);
+    std::thread::sleep(Duration::from_secs(60));
+    println!("Base State Population Complete.");
+
+    // Memory optimization: filter boundary_ops to only blocks in replay range.
+    // The bundle's boundary_ops covers populate_start..=populate_end (~5M blocks),
+    // but we only access it via .get(&h) for h in [replay_start, replay_end].
+    // Dropping the rest can free tens of GB on machines with limited RAM (AWS 128GB).
+    let _before = boundary_ops.len();
+    boundary_ops.retain(|h, _| *h >= replay_start && *h <= replay_end);
+    let _after = boundary_ops.len();
+    println!("boundary_ops filtered to replay range: {} -> {} entries ({:.1}% retained)",
+        _before, _after, (_after as f64 / _before as f64) * 100.0);
+
+    // =========================================================
+    // Phase 3: Replaying Operations (Benchmark) - 官方模式适配
+    // =========================================================
+    println!("\n=== Phase 2: Replaying Operations (Benchmark) ===");
+    
+    // === STREAMING mode: 50-block bounded channel ===
+    // Memory bounded ~25 MB (50 blocks × ~0.5 MB), supports arbitrary replay range.
+    // Producer runs ahead in background, main loop drains from channel.
+    let rss_before_stream_kb = get_rss_kb();
+    println!("\n=== Streaming replay ops [{}, {}] (queue=50 blocks) ===", replay_start, replay_end);
+    println!("  VmRSS before streaming: {:.2} GB", rss_before_stream_kb as f64 / 1024.0 / 1024.0);
+    let source_stream = source.clone().expect("eth-trace-dir is required for Phase 3 replay");
+    let (tx_stream, mut rx_stream) = tokio::sync::mpsc::channel(50);
+    let source_pre = source_stream.clone();
+    let client_pre = s3_client.clone();
+    rt.spawn(async move {
+        eth_replay_kv::run_ops_producer(replay_start, replay_end, source_pre, client_pre, tx_stream).await
+    });
+
+    // Drop OS page cache so Phase 3 SSD I/O is cold for QMDB engine.
+    println!("Dropping OS page cache before bench...");
+    let _ = std::process::Command::new("sync").status();
+    let _ = std::fs::write("/proc/sys/vm/drop_caches", "3");
+    std::thread::sleep(Duration::from_secs(5));
+
+    let bench_start = Instant::now();
+    let total_blocks = replay_end - replay_start + 1;
+
+    // --- 新增参数：N 个 ETH block 打包成 1 个 DB Task 批次 ---
+    let eth_blocks_per_db_block = 32; 
+    let ops_per_cset = 10;            
+    let csets_per_task = 2;           
+
+    // 2. 完全复刻官方 `hover_execute_op` 的消费者线程逻辑
+    let (db_tx, db_rx) = std::sync::mpsc::sync_channel(10);
+    let consumer_handle = std::thread::spawn(move || {
+        while let Ok((blk_height, tasks)) = db_rx.recv() {
+            vprintln!("PIPELINE_LOG: CLIENT_SUBMIT_START height={} timestamp={}",
+                blk_height,
+                Utc::now().to_rfc3339()
+            );
+            db_backend::update_kv(table_id, blk_height, tasks);
+            vprintln!("PIPELINE_LOG: CLIENT_SUBMIT_END height={} timestamp={}",
+                blk_height,
+                Utc::now().to_rfc3339()
+            );
+        }
+    });
+
+    // 3. 主线程：负责解析 ETH 数据，并按 `run_single_hover_block` 的结构拼装
+    let mut total_ops = 0;
+    let mut processed_eth_blocks = 0;
+    let mut interval_start = Instant::now();
+    let mut interval_ops = 0;
+
+    vprintln!("PIPELINE_LOG: CLIENT_GENERATE_START height={} timestamp={}",
+        global_db_height,
+        Utc::now().to_rfc3339()
+    );
+
+    rt.block_on(async {
+        let mut eth_block_counter = 0;
+        
+        // 严格按照官方的三层结构预分配
+        let mut task_list: Vec<parking_lot::RwLock<Option<SimpleTask>>> = Vec::new();
+        let mut cset_list: Vec<ChangeSet> = Vec::with_capacity(csets_per_task);
+        let mut current_cset = ChangeSet::new();
+        let mut current_batch_keys: HashSet<Vec<u8>> = HashSet::new(); // 保留防冲突机制
+
+        while let Some(msg) = rx_stream.recv().await {
+            let (h, ops_opt) = msg.expect("streaming read failed");
             let current_boundary_ops = boundary_ops.get(&h);
             
             if ops_opt.is_none() && current_boundary_ops.is_none() { continue; }

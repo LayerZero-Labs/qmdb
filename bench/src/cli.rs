@@ -59,6 +59,13 @@ pub struct Cli {
     #[arg(long)]
     pub eth_trace_dir: Option<String>,
 
+    /// Path to a pre-computed InitDbBundle (bincode) produced by `gen-init-db`.
+    /// When set, Phase 1 loads init_db + boundary_ops from this file instead of
+    /// regenerating them from traces via BaseStateSplitter. --eth-trace-dir is
+    /// still required (Phase 3 replay reads its ops from the traces).
+    #[arg(long)]
+    pub init_db_path: Option<String>,
+
     /// Ethereum Trace Replay start block id
     #[arg(long, default_value_t = 15012300)]
     pub eth_start_height: u64,

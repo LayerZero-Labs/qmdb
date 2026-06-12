@@ -51,7 +51,7 @@ const SHARD_LOG2: usize = 4;
 // + LVMT BLS prover + Rust runtime + RocksDB compaction temp ~7 GB
 // 8 GB declared → ~11 GB RocksDB + ~7 GB overhead = ~18 GB physical
 //   → 14 GB margin under 32 GB cap, comfortable.
-const MEMORY_MB: usize = 12288;
+const MEMORY_MB: usize = 2048;
 
 struct LvmtShard(LvmtDB);
 unsafe impl Send for LvmtShard {}
@@ -116,34 +116,46 @@ pub fn init(db_dir: &str, _start_from_existing: bool) {
 // execute_writes
 // ---------------------------------------------------------------------------
 fn execute_writes(height: i64, task_list: Vec<RwLock<Option<SimpleTask>>>) {
-    let mut global = GLOBAL_LVMT.lock().unwrap();
-    let g = global.as_mut().expect("LVMT not initialized");
-    let db = &mut g.db.0;
-
+    // Collect all ops across the entire block, sort by key (matches LVMT official
+    // benchmark: ~/lvmt/benchmarks/src/run.rs warmup() sorts before db.set).
+    // Sorted order improves RocksDB SST locality during compaction.
+    let mut all_ops: Vec<(Vec<u8>, u8, Vec<u8>)> = Vec::with_capacity(100_000);
     for task_lock in &task_list {
         let task_opt = task_lock.read();
         if let Some(task) = task_opt.as_ref() {
             for cset in task.get_change_sets().iter() {
                 cset.for_each_op(
                     |op_type, _shard_id, key_hash: &[u8; 32], _key, value: &[u8], _old_value, _rec| {
-                        let k = Key(key_hash.to_vec());
-                        match op_type {
-                            OP_CREATE | OP_WRITE => {
-                                db.set(&k, value.to_vec().into_boxed_slice());
-                            }
-                            OP_DELETE => {
-                                db.set(&k, Box::new([]));
-                            }
-                            OP_READ => {
-                                let _ = db.get(&k);
-                            }
-                            _ => {}
-                        }
+                        all_ops.push((key_hash.to_vec(), op_type, value.to_vec()));
                     },
                 );
             }
         }
     }
+    let t_sort = Instant::now();
+    all_ops.sort_by(|(k1, _, _), (k2, _, _)| k1.cmp(k2));
+    let sort_us = t_sort.elapsed().as_micros();
+
+    let mut global = GLOBAL_LVMT.lock().unwrap();
+    let g = global.as_mut().expect("LVMT not initialized");
+    let db = &mut g.db.0;
+
+    for (kh, op_type, value) in all_ops.iter() {
+        let k = Key(kh.clone());
+        match *op_type {
+            OP_CREATE | OP_WRITE => {
+                db.set(&k, value.clone().into_boxed_slice());
+            }
+            OP_DELETE => {
+                db.set(&k, Box::new([]));
+            }
+            OP_READ => {
+                let _ = db.get(&k);
+            }
+            _ => {}
+        }
+    }
+    println!("[LVMT block_sort] {} ops sorted in {}us", all_ops.len(), sort_us);
 
     let t_commit = Instant::now();
     db.commit(height as u64).unwrap();
