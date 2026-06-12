@@ -1,9 +1,0 @@
-name: 'Setup Benchmark Environment'
-description: 'Prepares environment for benchmarking'
-
-runs:
-  using: "composite"
-  steps:
-    - name: Configure system limits
-      shell: bash
-      run: ulimit -n 65535 

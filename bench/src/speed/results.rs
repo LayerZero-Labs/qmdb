@@ -1,5 +1,6 @@
 use crate::cli::Cli;
 use crate::speed::db_backend;
+use crate::speed::result_log;
 use crate::speed::metrics::LatencyStats;
 use chrono::{DateTime, Local};
 use memory_stats::memory_stats;
@@ -188,12 +189,23 @@ impl BenchmarkResults {
     pub fn write_to_file(&mut self, filename: &str) {
         self.elapsed_s = self.start_time.elapsed().as_secs_f64();
         self.summary.clear();
+        // for (key, value) in &self.tputs {
+        //     self.summary.insert(
+        //         format!("{key}.throughput_per_sec"),
+        //         value.get_last_throughput(),
+        //     );
+        // }
         for (key, value) in &self.tputs {
-            self.summary.insert(
-                format!("{}.throughput_per_sec", key),
-                value.get_last_throughput(),
-            );
+            let k = format!("{key}.throughput_per_sec");
+            let v = value.get_last_throughput();
+
+            // ★ 直接打印
+            println!("{k}: {v}");
+
+            // ★ 写入 summary JSON
+            self.summary.insert(k, v);
         }
+
         if let Some(stats) = self.latencies.get("reads") {
             if let Some(detailed_stats) = stats.detailed_stats() {
                 self.summary.insert(
@@ -211,10 +223,10 @@ impl BenchmarkResults {
         match std::fs::File::create(filename) {
             Ok(file) => {
                 if let Err(e) = serde_json::to_writer_pretty(file, self) {
-                    eprintln!("Failed to write results to file: {}", e);
+                    eprintln!("Failed to write results to file: {e}");
                 }
             }
-            Err(e) => eprintln!("Failed to create file: {}", e),
+            Err(e) => eprintln!("Failed to create file: {e}"),
         }
     }
 
@@ -257,13 +269,13 @@ impl BenchmarkResults {
         if let Some(usage) = memory_stats() {
             self.log_sample("memory_usage_physical", usage.physical_mem as f64);
             self.log_sample("memory_usage_virtual", usage.virtual_mem as f64);
-            println!(
+            result_log::write_line(&format!(
                 "MEM(entries={}) Memory usage: physical={:.2}GB virtual={:.2}GB; physical/entry={:.2}bytes",
                 self.entries_in_db,
                 usage.physical_mem as f64 / 1024.0 / 1024.0 / 1024.0,
                 usage.virtual_mem as f64 / 1024.0 / 1024.0 / 1024.0,
                 usage.physical_mem as f64 / self.entries_in_db as f64
-            );
+            ));
         } else {
             println!("Couldn't get the current memory usage :(");
         }
@@ -279,7 +291,7 @@ impl BenchmarkResults {
         {
             Ok(output) => output.stdout,
             Err(e) => {
-                eprintln!("Failed to run 'du' command: {}", e);
+                eprintln!("Failed to run 'du' command: {e}");
                 return;
             }
         };
@@ -294,12 +306,12 @@ impl BenchmarkResults {
             .unwrap();
 
         self.log_sample("db_space_usage", usage as f64);
-        println!(
+        result_log::write_line(&format!(
             "SSD(entries={}) Usage: {:.2}GB, {:.2}bytes/entry",
             self.entries_in_db,
             usage as f64 / 1024.0 / 1024.0,
             usage as f64 / self.entries_in_db as f64
-        );
+        ));
     }
 
     pub fn log_io_stats(&mut self) {
@@ -313,11 +325,11 @@ impl BenchmarkResults {
         // write_bytes: 3542319104
         // cancelled_write_bytes: 719708160
         let pid: u32 = std::process::id();
-        let io_path = format!("/proc/{}/io", pid);
+        let io_path = format!("/proc/{pid}/io");
         let io_contents = match std::fs::read_to_string(&io_path) {
             Ok(contents) => contents,
             Err(e) => {
-                eprintln!("Failed to read {}: {}", io_path, e);
+                eprintln!("Failed to read {io_path}: {e}");
                 return;
             }
         };
@@ -328,11 +340,11 @@ impl BenchmarkResults {
             let value = match parts[1].parse::<u64>() {
                 Ok(val) => val,
                 Err(e) => {
-                    eprintln!("Failed to parse value in line '{}': {}", line, e);
+                    eprintln!("Failed to parse value in line '{line}': {e}");
                     continue;
                 }
             };
-            self.log_sample(&format!("iostats.{}", key), value as f64);
+            self.log_sample(&format!("iostats.{key}"), value as f64);
         }
     }
 
@@ -342,7 +354,7 @@ impl BenchmarkResults {
         let diskstats = match procfs::diskstats() {
             Ok(stats) => stats,
             Err(e) => {
-                eprintln!("Failed to read disk stats: {}", e);
+                eprintln!("Failed to read disk stats: {e}");
                 return;
             }
         };
@@ -393,7 +405,7 @@ impl BenchmarkResults {
         let process = match procfs::process::Process::new(pid as i32) {
             Ok(proc) => proc,
             Err(e) => {
-                eprintln!("Failed to get process info: {}", e);
+                eprintln!("Failed to get process info: {e}");
                 return;
             }
         };
@@ -401,7 +413,7 @@ impl BenchmarkResults {
         let stat = match process.stat() {
             Ok(stat) => stat,
             Err(e) => {
-                eprintln!("Failed to get process stat: {}", e);
+                eprintln!("Failed to get process stat: {e}");
                 return;
             }
         };
@@ -414,10 +426,10 @@ impl BenchmarkResults {
         let num_cores = procfs::CpuInfo::current().unwrap().num_cores();
         let cpu_utilization = (total_time / elapsed) * 100.0 / num_cores as f64;
 
-        println!(
+        result_log::write_line(&format!(
             "CPU(entries={}) User time: {:.2}s, System time: {:.2}s, Total time: {:.2}s, Utilization: {:.2}%",
             self.entries_in_db, user_time, system_time, total_time, cpu_utilization
-        );
+        ));
 
         self.log_sample("cpu_user_time", user_time);
         self.log_sample("cpu_system_time", system_time);
@@ -437,10 +449,16 @@ impl BenchmarkResults {
     pub fn record_throughput(&mut self, operation_name: &str, count: u64, duration: Duration) {
         if let Some(record) = self.tputs.get_mut(operation_name) {
             let update = record.record(count, duration, self.entries_in_db);
-            println!(
+            let line = format!(
                 "{}@{} entries: {}, total: {}",
                 operation_name, self.entries_in_db, update, record
             );
+            // Populate progress -> stdout; hover-phase results -> metrics log.
+            if operation_name == "block_population" || operation_name == "fresh_inserts" {
+                println!("{line}");
+            } else {
+                result_log::write_line(&line);
+            }
         }
     }
 
@@ -452,63 +470,67 @@ impl BenchmarkResults {
     ) {
         if let Some(record) = self.tputs.get_mut(operation_name) {
             let update = record.record_as_total(new_total, duration, self.entries_in_db);
-            println!(
+            let line = format!(
                 "{}@{} entries: {}, total: {}",
                 operation_name, self.entries_in_db, update, record
             );
+            // Populate progress -> stdout; hover-phase results -> metrics log.
+            if operation_name == "block_population" || operation_name == "fresh_inserts" {
+                println!("{line}");
+            } else {
+                result_log::write_line(&line);
+            }
         }
     }
 
     pub fn print_summary(&self) {
-        println!(
+        result_log::write_line(&format!(
             "Benchmarking summary ({:.1} seconds so far)",
             self.elapsed_s
-        );
-        for name in [
-            "block_population",
-            "updates",
-            "inserts",
-            "deletes",
-            "reads",
-            "transactions",
-        ] {
+        ));
+        for name in ["block_population", "updates", "inserts", "deletes", "reads"] {
             let msg: String = if name == "block_population" {
                 "populate DB with entries".to_string()
             } else {
-                format!("benchmark {}", name)
+                format!("benchmark {name}")
             };
-            println!(
+            result_log::write_line(&format!(
                 " - Time to {}: {:.3?}",
                 msg,
                 Duration::from_secs_f64(self.tputs[name].elapsed)
-            );
+            ));
         }
         let latency = self.latencies.get("reads").unwrap();
         let total_samples: usize = latency.get_total_samples();
         let total_latency = latency.get_total_latency();
-        println!(
-            " - Time taken to benchmark read latency: {:.3?} ({} samples)",
-            total_latency, total_samples
-        );
+        result_log::write_line(&format!(
+            " - Time taken to benchmark read latency: {total_latency:.3?} ({total_samples} samples)"
+        ));
 
-        println!("Results summary");
-        println!("\tentry_count: {}", self.config.entry_count);
-
-        println!("\tdb_backend: {}", db_backend::NAME);
-        println!("\telapsed_s: {:.3}", self.elapsed_s);
-        println!("\telapsed: {:.3?}", Duration::from_secs_f64(self.elapsed_s));
-        println!("\tsuccess: {}", self.success);
+        result_log::write_line("Results summary");
+        result_log::write_line(&format!("\tentry_count: {}", self.config.entry_count));
+        result_log::write_line(&format!("\tdb_backend: {}", db_backend::NAME));
+        result_log::write_line(&format!("\telapsed_s: {:.3}", self.elapsed_s));
+        result_log::write_line(&format!(
+            "\telapsed: {:.3?}",
+            Duration::from_secs_f64(self.elapsed_s)
+        ));
+        result_log::write_line(&format!("\tsuccess: {}", self.success));
         for (key, value) in &self.tputs {
-            println!("\t{}: {:.3?}/s", key, value.get_last_throughput());
+            if key == "transactions" {
+                continue; // TPS benchmark removed
+            }
+            result_log::write_line(&format!("\t{}: {:.3?}/s", key, value.get_last_throughput()));
         }
         if let Some(stats) = self.latencies.get("reads") {
             if let Some(detailed_stats) = stats.detailed_stats() {
                 detailed_stats.print("Read", true);
             } else {
-                println!("No read latency data available");
+                result_log::write_line("No read latency data available");
             }
         } else {
-            println!("No read latency data available");
+            result_log::write_line("No read latency data available");
         }
     }
 }
+
