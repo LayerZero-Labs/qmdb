@@ -1,0 +1,24 @@
+[package]
+name = "rainblock-trie"
+version = "0.1.0"
+edition = "2021"
+authors = ["Chenxing Li <ChenxingLi@users.noreply.github.com>"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+rlp = "0.4.6"
+ethereum-types = "0.9"
+kvdb = { workspace = true }
+smallvec = "*"
+blake2-hasher = { workspace = true, optional = true }
+keccak-hasher = { workspace = true }
+hash-db = { workspace = true }
+
+[dev-dependencies]
+kvdb-memorydb = { workspace = true }
+rand = "0.7"
+
+[features]
+light-hash = ["blake2-hasher"]
+thread-safe = []

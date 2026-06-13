@@ -1,0 +1,28 @@
+[package]
+name = "asb-authdb"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+asb-options = { workspace = true }
+asb-backend = { workspace = true }
+asb-profile = { workspace = true }
+authdb = { workspace = true }
+parity-journaldb = { workspace = true }
+kvdb = { workspace = true }
+cfx-kvdb-rocksdb = { workspace = true }
+lvmt-db = { workspace = true }
+patricia-trie-ethereum = { workspace = true }
+primitive-types = { workspace = true }
+hash-db = { workspace = true }
+trie-db = { workspace = true }
+parity-scale-codec = { workspace = true }
+cfx-primitives = { workspace = true }
+rainblock-trie = { workspace = true }
+
+[features]
+light-hash = ["parity-journaldb/light-hash", "rainblock-trie/light-hash"]
+lmpts = ["asb-backend/lmpts-backend"]
+thread-safe = ["rainblock-trie/thread-safe"]

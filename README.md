@@ -42,6 +42,7 @@ means writing one adapter and registering it (see [Adding a new system](#5-addin
 
 ```
 crates/                      QMDB engine workspace (qmdb, qmdb-common, hpfile) = the default backend
+nomt/ reth/ lvmt/ eth-replay-kv/   vendored backend sources (built via bench's ../X path-deps)
 bench/
   src/bin/speed.rs           benchmark driver (populate + hover + ETH replay)
   src/cli.rs                 all command-line flags
@@ -62,15 +63,13 @@ run_bench.sh                 generic sweep engine (+ systems/<name>.sh plugins)
 monitor/                     hwmonitor.sh + make_all_plots.py (cgroup mem/CPU/IO sampling)
 ```
 
-> **Important:** the backend *libraries* (nomt, reth, lvmt, …) are **NOT** vendored in
-> this repo. `bench/Cargo.toml` references them as **path dependencies to sibling
-> directories** (`../../nomt`, `../../reth`, `../../lvmt`, `../../eth-replay-kv`).
-> Lay the tree out like this so the paths resolve with no edits:
-> ```
-> qmdb_project/
->   QMDB-Benchmark/   ← this repo
->   nomt/  reth/  lvmt/  eth-replay-kv/
-> ```
+> **Self-contained:** the backend libraries (`nomt/`, `reth/`, `lvmt/`,
+> `eth-replay-kv/`) are **vendored at the repo root**, so a single `git clone` gets
+> everything needed to build all systems — no separate downloads. `bench/Cargo.toml`
+> references them via path deps `../nomt`, `../reth`, `../lvmt`, `../eth-replay-kv`.
+> They are kept out of the root Cargo workspace (`exclude = [...]` in `Cargo.toml`)
+> since they carry their own crates/workspaces. `lvmt/pp/` holds large precomputed
+> BLS parameters (~97 MB) needed by LVMT.
 
 ---
 
@@ -79,7 +78,7 @@ monitor/                     hwmonitor.sh + make_all_plots.py (cgroup mem/CPU/IO
 - Rust (pinned by `rust-toolchain.toml`) and a C/C++ toolchain (RocksDB builds C++).
 - A fast SSD with enough free space for the target DB size.
 - `ulimit -n 65535` (or higher) — QMDB's io_uring prefetcher opens many files.
-- Sibling backend crates present (see the note above) for any non-QMDB backend.
+- Backend sources are already vendored in the repo (`nomt/ reth/ lvmt/ eth-replay-kv/`) — nothing extra to fetch.
 
 ---
 
@@ -249,7 +248,7 @@ and rename.
 use_<sys> = ["dep:<sys>-crate"]          # or = [] if it needs no extra deps
 
 [dependencies]
-<sys>-crate = { path = "../../<sys>", optional = true }   # sibling dir (see §1 note)
+<sys>-crate = { path = "../<sys>", optional = true }   # vendored at repo root; also add to Cargo.toml exclude
 ```
 If your system's native deps clash with Reth's or LVMT's (zstd / rocksdb `links=`),
 add it to `Cargo.toml.lvmt` (and/or `.reth`) and extend `switch_backend.sh` accordingly.

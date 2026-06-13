@@ -1,0 +1,45 @@
+[package]
+name = "eth-replay-kv"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+bincode = "1.3"
+anyhow = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+aws-config = "1"
+aws-sdk-s3 = "1"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+futures = "0.3"
+indicatif = "0.17"
+num_cpus = "1"
+tar = "0.4"
+flate2 = "1"
+hex = "0.4"
+blake3 = "1.8.3"
+
+[[bin]]
+name = "kv-op-counts"
+path = "src/bin/kv_op_counts.rs"
+
+[[bin]]
+name = "kv-compress"
+path = "src/bin/kv_compress.rs"
+
+[[bin]]
+name = "kv-validate"
+path = "src/bin/kv_validate.rs"
+
+[[bin]]
+name = "kv-key-trace"
+path = "src/bin/kv_key_trace.rs"
+
+[[bin]]
+name = "kv-dump-ops"
+path = "src/bin/kv_dump_ops.rs"
+
+[[bin]]
+name = "kv-analyze"
+path = "src/bin/kv_analyze.rs"

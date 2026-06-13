@@ -1,0 +1,18 @@
+[package]
+name = "ppot2ark"
+version = "0.1.0"
+authors = ["ChenxingLi <lylcx2007@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bellman_ce = { git = "https://github.com/kobigurk/phase2-bn254", rev = "dd6b966"}
+powersoftau = { git = "https://github.com/kobigurk/phase2-bn254", rev = "dd6b966"}
+ff = {package = "ff_ce", version = "0.7", features = ["derive"]}
+memmap = "0.7.0"
+
+ark-ff = { version="^0.2.0", default-features = false }
+ark-ec = { version="^0.2.0", default-features = false }
+ark-std = { version="^0.2.0", default-features = false }
+ark-bn254 = { version="^0.2.0", features = ["std","curve"] }

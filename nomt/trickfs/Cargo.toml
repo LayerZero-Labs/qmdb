@@ -1,0 +1,20 @@
+[package]
+name = "trickfs"
+version = "0.1.0"
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+fuser.workspace = true
+libc.workspace = true
+log.workspace = true
+tempfile.workspace = true
+rand.workspace = true
+rand_pcg.workspace = true
+rand_distr.workspace = true
+
+[dev-dependencies]
+env_logger.workspace = true

@@ -1,0 +1,16 @@
+[package]
+name = "lvmt-serde-derive"
+version = "0.1.0"
+authors = ["Chenxing Li <ChenxingLi@users.noreply.github.com>"]
+edition = "2018"
+
+[lib]
+proc-macro = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+syn = {version="1", features=["derive"]}
+proc-macro2 = "1"
+quote = "1"
+proc-macro-crate="1"

@@ -1,0 +1,20 @@
+[package]
+name = "asb-main"
+version = "0.1.0"
+authors = ["Chenxing Li <ChenxingLi@users.noreply.github.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+
+asb-options = { workspace = true }
+asb-backend = { workspace = true }
+asb-authdb = { workspace = true }
+asb-profile = { workspace = true }
+asb-tasks = { workspace = true }
+
+authdb = { workspace = true }
+kvdb = { workspace = true }
+
+fs_extra = "1.2.0"

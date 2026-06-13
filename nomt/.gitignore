@@ -1,0 +1,19 @@
+# Common ignores
+.DS_Store
+.idea
+.vscode
+.envrc
+
+/target
+
+# samply / benchtop
+profile.json
+/test
+/nomt/test
+
+# xtask
+/benchtop/regression.toml
+/benchtop/sov_db*
+/benchtop/nomt_db*
+/benchtop/sp_trie_db*
+/benchtop/target

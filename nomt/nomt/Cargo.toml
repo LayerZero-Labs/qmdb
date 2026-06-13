@@ -1,0 +1,66 @@
+[package]
+name = "nomt"
+description = "Nearly Optimal Merkle Trie - Schema and Database"
+version = "1.0.3"
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow.workspace = true
+nomt-core = { path = "../core", default-features = false, features = ["std"], version = "1.0.1" }
+parking_lot.workspace = true
+threadpool.workspace = true
+bitvec.workspace = true
+twox-hash.workspace = true
+fxhash.workspace = true
+dashmap.workspace = true
+crossbeam.workspace = true
+crossbeam-channel.workspace = true
+slab.workspace = true
+rand.workspace = true
+ahash.workspace = true
+imbl.workspace = true
+lru.workspace = true
+libc.workspace = true
+criterion = { workspace = true, optional = true }
+thread_local.workspace = true
+cfg-if.workspace = true
+borsh = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+
+[target.'cfg(target_os="linux")'.dependencies]
+io-uring.workspace = true
+
+[target.'cfg(loom)'.dependencies]
+loom.workspace = true
+
+[dev-dependencies]
+rand_pcg.workspace = true
+hex-literal.workspace = true
+tempfile.workspace = true
+criterion.workspace = true
+lazy_static.workspace = true
+hex.workspace = true
+quickcheck.workspace = true
+blake3.workspace = true
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
+
+[[bench]]
+name = "beatree"
+harness = false
+
+[features]
+default = ["blake3-hasher", "sha2-hasher"]
+benchmarks = ["dep:criterion"]
+fuzz = []
+borsh = ["dep:borsh", "nomt-core/borsh"]
+blake3-hasher = ["nomt-core/blake3-hasher"]
+sha2-hasher = ["nomt-core/sha2-hasher"]
+serde = ["dep:serde", "nomt-core/serde"]
