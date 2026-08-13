@@ -1558,6 +1558,84 @@ fn run_eth_replay_mode(
     results.record_throughput_as_total("eth_replay_ops", total_ops, total_duration);
 }
 
+/// Streaming source for the ETH-replay base state.
+///
+/// Bundle mode reads the `InitDbBundle` field-by-field off ONE `BufReader` so
+/// the ~60 GB `init_db` Vec is never materialized at once (Phase-1 peak RSS
+/// ~1.3 GB instead of ~64 GB, which is what lets the replay run on a 62 GB box).
+/// Trace mode just wraps the already-in-memory splitter output.
+///
+/// This works because bincode 1.3's free functions (`serialize`/
+/// `deserialize_from`, used both by the writer that produced the bundle and
+/// here) use a flat, fixint, u64-length-prefixed layout. So reading the fields
+/// in struct-declaration order off the same reader —
+///   populate_start:u64, populate_end:u64, init_db.len():u64,
+///   then each (Vec<u8>,Vec<u8>) entry, then boundary_ops.len():u64,
+///   then each (u64, Vec<Operation>) pair —
+/// is byte-identical to a single `deserialize_from::<InitDbBundle>`.
+enum InitDbSource {
+    Mem {
+        iter: Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)>>,
+        boundary: std::collections::HashMap<u64, Vec<eth_replay_kv::Operation>>,
+    },
+    Stream {
+        r: std::io::BufReader<std::fs::File>,
+        remaining: u64,
+    },
+}
+
+impl InitDbSource {
+    /// Next base-state (key, value), or None once the init_db section is done.
+    fn next_entry(&mut self) -> Option<(Vec<u8>, Vec<u8>)> {
+        match self {
+            InitDbSource::Mem { iter, .. } => iter.next(),
+            InitDbSource::Stream { r, remaining } => {
+                if *remaining == 0 {
+                    return None;
+                }
+                let kv: (Vec<u8>, Vec<u8>) = bincode::deserialize_from(&mut *r)
+                    .expect("bincode deserialize init_db entry");
+                *remaining -= 1;
+                Some(kv)
+            }
+        }
+    }
+
+    /// Consume the source and return the boundary_ops restricted to
+    /// [replay_start, replay_end]. In stream mode this reads the trailing
+    /// HashMap off the same reader, so it MUST be called only after
+    /// `next_entry` has returned None (init_db fully drained); in mem mode it
+    /// just filters the in-memory map.
+    fn finish_boundary_ops(
+        self,
+        replay_start: u64,
+        replay_end: u64,
+    ) -> std::collections::HashMap<u64, Vec<eth_replay_kv::Operation>> {
+        match self {
+            InitDbSource::Mem { mut boundary, .. } => {
+                boundary.retain(|h, _| *h >= replay_start && *h <= replay_end);
+                boundary
+            }
+            InitDbSource::Stream { mut r, remaining } => {
+                assert_eq!(remaining, 0,
+                    "finish_boundary_ops called before init_db was fully drained");
+                let n: u64 = bincode::deserialize_from(&mut r)
+                    .expect("bincode deserialize boundary_ops len");
+                let mut map = std::collections::HashMap::new();
+                for _ in 0..n {
+                    let (h, ops): (u64, Vec<eth_replay_kv::Operation>) =
+                        bincode::deserialize_from(&mut r)
+                            .expect("bincode deserialize boundary_ops entry");
+                    if h >= replay_start && h <= replay_end {
+                        map.insert(h, ops);
+                    }
+                }
+                map
+            }
+        }
+    }
+}
+
 fn run_eth_replay_from_bundle(
     table_id: usize,
     bundle_path: &str,
@@ -1602,18 +1680,25 @@ fn run_eth_replay_inner(
     // =========================================================
     // Phase 1: produce (init_db, boundary_ops) — either from bundle or from trace
     // =========================================================
-    let (init_db, mut boundary_ops): (Vec<(Vec<u8>, Vec<u8>)>, std::collections::HashMap<u64, Vec<eth_replay_kv::Operation>>) = if let Some(bp) = bundle_path {
-        println!("\n=== Phase 1: Loading InitDbBundle from {} ===", bp);
+    let mut src: InitDbSource = if let Some(bp) = bundle_path {
+        println!("\n=== Phase 1: Streaming InitDbBundle from {} ===", bp);
         let t0 = std::time::Instant::now();
         let f = std::fs::File::open(bp).expect("open bundle file");
-        let r = std::io::BufReader::with_capacity(64 * 1024 * 1024, f);
-        let bundle: eth_replay_kv::InitDbBundle = bincode::deserialize_from(r)
-            .expect("bincode deserialize InitDbBundle");
-        println!("Bundle loaded in {:.1}s  populate=[{},{}]  init_db={}  boundary_blocks={}",
+        let mut r = std::io::BufReader::with_capacity(64 * 1024 * 1024, f);
+        // Read only the bundle header off the reader, in struct-declaration
+        // order: populate_start, populate_end, then the init_db Vec length.
+        // The init_db entries and the trailing boundary_ops map stay on disk
+        // and are pulled lazily (next_entry / finish_boundary_ops).
+        let bundle_populate_start: u64 = bincode::deserialize_from(&mut r)
+            .expect("bincode deserialize populate_start");
+        let bundle_populate_end: u64 = bincode::deserialize_from(&mut r)
+            .expect("bincode deserialize populate_end");
+        let n_init: u64 = bincode::deserialize_from(&mut r)
+            .expect("bincode deserialize init_db len");
+        println!("Bundle header read in {:.1}s  populate=[{},{}]  init_db={} (streaming)",
             t0.elapsed().as_secs_f64(),
-            bundle.populate_start, bundle.populate_end,
-            bundle.init_db.len(), bundle.boundary_ops.len());
-        (bundle.init_db, bundle.boundary_ops)
+            bundle_populate_start, bundle_populate_end, n_init);
+        InitDbSource::Stream { r, remaining: n_init }
     } else {
         println!("\n=== Phase 1: Populating Base State (from trace) ===");
         let source = source.clone().expect("source required when bundle not given");
@@ -1636,12 +1721,12 @@ fn run_eth_replay_inner(
             }
         });
         let (hm, bops) = splitter.into_parts();
-        (hm.into_iter().collect(), bops)
+        InitDbSource::Mem { iter: Box::new(hm.into_iter()), boundary: bops }
     };
-    println!("init_db size: {}, boundary blocks: {}", init_db.len(), boundary_ops.len());
 
     // =========================================================
-    // Phase 2: 将init db内存版本populate到DB
+    // Phase 2: 将init db内存版本populate到DB (streaming: pull one entry at a time
+    // via src.next_entry() so the full init_db Vec is never held in memory)
     // =========================================================
     let mut total_init_entries = 0;
     let ops_per_block = 100000;
@@ -1653,7 +1738,7 @@ fn run_eth_replay_inner(
     let mut current_cset_list: Vec<ChangeSet> = Vec::with_capacity(csets_per_task);
     let mut batch_tasks: Vec<parking_lot::RwLock<Option<SimpleTask>>> = Vec::with_capacity(tasks_per_block);
 
-    for (k, v) in init_db {
+    while let Some((k, v)) = src.next_entry() {
         if v.is_empty() {
             println!("Empty value for key: {:?}", k);
             continue;
@@ -1736,15 +1821,16 @@ fn run_eth_replay_inner(
     std::thread::sleep(Duration::from_secs(60));
     println!("Base State Population Complete.");
 
-    // Memory optimization: filter boundary_ops to only blocks in replay range.
-    // The bundle's boundary_ops covers populate_start..=populate_end (~5M blocks),
-    // but we only access it via .get(&h) for h in [replay_start, replay_end].
-    // Dropping the rest can free tens of GB on machines with limited RAM (AWS 128GB).
-    let _before = boundary_ops.len();
-    boundary_ops.retain(|h, _| *h >= replay_start && *h <= replay_end);
-    let _after = boundary_ops.len();
-    println!("boundary_ops filtered to replay range: {} -> {} entries ({:.1}% retained)",
-        _before, _after, (_after as f64 / _before as f64) * 100.0);
+    // Consume the source's boundary_ops, keeping only blocks in the replay
+    // range. In stream mode this reads the trailing boundary_ops HashMap off
+    // the same bundle reader (init_db is now fully drained) and filters as it
+    // reads, so the ~5M-block full map is never materialized; in trace/mem mode
+    // it just filters the in-memory map. We only access boundary_ops via
+    // .get(&h) for h in [replay_start, replay_end], so dropping the rest frees
+    // tens of GB on limited-RAM machines.
+    let boundary_ops = src.finish_boundary_ops(replay_start, replay_end);
+    println!("boundary_ops in replay range [{}, {}]: {} blocks retained",
+        replay_start, replay_end, boundary_ops.len());
 
     // =========================================================
     // Phase 3: Replaying Operations (Benchmark) - 官方模式适配
