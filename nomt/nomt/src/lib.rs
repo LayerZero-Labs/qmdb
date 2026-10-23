@@ -18,7 +18,6 @@ use overlay::{LiveOverlay, OverlayMarker};
 use page_cache::PageCache;
 use parking_lot::{ArcRwLockReadGuard, Mutex, RwLock};
 use store::{Store, ValueTransaction};
-use std::time::Instant;
 
 pub use io::IoUringPermission;
 pub use nomt_core::hasher;
@@ -32,8 +31,6 @@ pub use overlay::{InvalidAncestors, Overlay};
 pub use store::HashTableUtilization;
 
 // beatree module needs to be exposed to be benchmarked and fuzzed
-pub mod iostats;
-
 #[cfg(any(feature = "benchmarks", feature = "fuzz"))]
 #[allow(missing_docs)]
 pub mod beatree;
@@ -58,56 +55,6 @@ mod task;
 mod io;
 
 const MAX_COMMIT_CONCURRENCY: usize = 64;
-
-/// 辅助函数：格式化 Value 用于日志输出
-/// 如果是 None，显示 "None"
-/// 如果数据太长，只显示前 4 个字节和总长度
-// fn format_val_log(val: Option<&[u8]>) -> String {
-//     match val {
-//         None => "None".to_string(),
-//         Some(v) => {
-//             if v.len() > 16 {
-//                 // 如果数据大于16字节，只打印前4字节的Hex + 长度
-//                 format!("[{:02x}{:02x}{:02x}{:02x}... len={}]", v[0], v[1], v[2], v[3], v.len())
-//             } else {
-//                 // 短数据直接打印 Hex
-//                 let mut s = String::from("[");
-//                 for byte in v {
-//                     use std::fmt::Write;
-//                     write!(s, "{:02x}", byte).unwrap();
-//                 }
-//                 s.push(']');
-//                 s
-//             }
-//         }
-//     }
-// }
-fn format_val_log(val: Option<&[u8]>) -> String {
-    match val {
-        None => "None".to_string(),
-        Some(v) => {
-            let mut s = String::from("[");
-            for byte in v {
-                use std::fmt::Write;
-                write!(s, "{:02x}", byte).unwrap();
-            }
-            s.push(']');
-            s
-        }
-    }
-}
-
-// KeyPath 通常是 [u8; 32]，直接用 {:?} 输出是数组格式，这里也可以简单处理一下
-fn format_key_log(key: &KeyPath) -> String {
-    // 假设 KeyPath 实现了 AsRef<[u8]> 或者本身就是 [u8; 32]
-    // 取前4位和后4位用于识别
-    let k = key.as_ref();
-    if k.len() >= 8 {
-        format!("0x{:02x}{:02x}..{:02x}{:02x}", k[0], k[1], k[k.len()-2], k[k.len()-1])
-    } else {
-        format!("{:?}", k)
-    }
-}
 
 /// A full value stored within the trie.
 pub type Value = Vec<u8>;
@@ -267,14 +214,6 @@ impl<T: HashAlgorithm> Nomt<T> {
     /// It is recommended to check io_uring permissions before calling this function by calling
     /// [`check_iou_permissions`]
     pub fn open(mut o: Options) -> anyhow::Result<Self> {
-        // [DEBUG] 打印启动参数，确认配置是否生效
-        println!("\n[NOMT DEBUG] Opening NOMT...");
-        println!("[NOMT DEBUG] Commit Concurrency: {}", o.commit_concurrency);
-        println!("[NOMT DEBUG] IO Workers: {}", o.io_workers);
-        println!("[NOMT DEBUG] Hashtable Buckets (Bitbox Pages): {}", o.bitbox_num_pages);
-        println!("[NOMT DEBUG] Page Cache Size: {} MiB", o.page_cache_size);
-        println!("[NOMT DEBUG] Pre-populate: {}", o.prepopulate_page_cache);
-
         if o.commit_concurrency == 0 {
             anyhow::bail!("commit concurrency must be greater than zero".to_string());
         }
@@ -292,13 +231,9 @@ impl<T: HashAlgorithm> Nomt<T> {
         let root = compute_root_node::<T>(&page_cache, &store);
 
         if o.prepopulate_page_cache {
-            println!("[NOMT DEBUG] Pre-populating page cache... (This might take time)");
             let io_handle = store.io_pool().make_handle();
             merkle::prepopulate_cache(io_handle, &page_cache, &store, o.page_cache_upper_levels)?;
-            println!("[NOMT DEBUG] Pre-population done.");
         }
-
-        println!("[NOMT DEBUG] NOMT Initialized Successfully.\n");
 
         Ok(Self {
             merkle_update_pool: UpdatePool::new(o.commit_concurrency, o.warm_up),
@@ -335,37 +270,6 @@ impl<T: HashAlgorithm> Nomt<T> {
         let _guard = self.access_lock.read();
         self.store.load_value(path)
     }
-    /// Returns the value stored under the given key.
-    // #[doc(hidden)]
-    // pub fn read(&self, path: KeyPath) -> anyhow::Result<Option<Value>> {
-    //     // [TRACER] Nomt::read (Direct)
-    //     let _guard = self.access_lock.read();
-        
-    //     let start = Instant::now();
-    //     let res = self.store.load_value(path);
-    //     let elapsed = start.elapsed();
-
-    //     // --- 修改开始：详细日志 ---
-    //     let val_str = if let Ok(ref v) = res {
-    //         format_val_log(v.as_deref())
-    //     } else {
-    //         "Error".to_string()
-    //     };
-        
-    //     // 区分是否命中内存池的简单猜测 ( < 10us 极快)
-    //     let source_guess = if elapsed.as_micros() < 10 { "MEM/CACHE" } else { "DISK/IO" };
-
-    //     println!(
-    //         "[TRACER] Nomt::read | Key: {} | Val: {} | Source: {} | Time: {:?}", 
-    //         format_key_log(&path), 
-    //         val_str, 
-    //         source_guess, 
-    //         elapsed
-    //     );
-    //     // --- 修改结束 ---
-
-    //     res
-    // }
 
     /// Returns the current sync sequence number.
     #[doc(hidden)]
@@ -611,48 +515,6 @@ impl<T> Session<T> {
         }
         self.store.load_value(path)
     }
-    /// Synchronously read the value stored under the given key.
-    // pub fn read(&self, path: KeyPath) -> anyhow::Result<Option<Value>> {
-    //     let _maybe_guard = self.metrics.record(Metric::ValueFetchTime);
-
-    //     // 1. Check Overlay (Memory Layer)
-    //     if let Some(value_change) = self.overlay.value(&path) {
-    //         let val_opt = value_change.as_option();
-    //         // --- 修改：打印 Overlay 命中 ---
-    //         println!(
-    //             "[TRACER] Session::read | Key: {} | Val: {} | Source: OVERLAY_HIT",
-    //             format_key_log(&path),
-    //             format_val_log(val_opt.as_deref()) // 需要把 Option<&Value> 转为 Option<&[u8]>
-    //         );
-    //         // ---------------------------
-    //         return Ok(val_opt.map(|v| v.to_vec()));
-    //     }
-
-    //     // 2. Fallback to Store (Disk or PagePool)
-    //     let start = Instant::now();
-    //     let res = self.store.load_value(path);
-    //     let elapsed = start.elapsed();
-
-    //     // --- 修改：打印 Store 结果 ---
-    //     let val_str = if let Ok(ref v) = res {
-    //         format_val_log(v.as_deref())
-    //     } else {
-    //         "Error".to_string()
-    //     };
-
-    //     let source_guess = if elapsed.as_micros() < 10 { "STORE_MEM" } else { "STORE_DISK" };
-
-    //     println!(
-    //         "[TRACER] Session::read | Key: {} | Val: {} | Source: {} | Time: {:?}", 
-    //         format_key_log(&path), 
-    //         val_str, 
-    //         source_guess, 
-    //         elapsed
-    //     );
-    //     // ---------------------------
-
-    //     res
-    // }
 
     /// Returns the [`Root`] at which this session is based off of.
     pub fn prev_root(&self) -> Root {
@@ -708,39 +570,6 @@ impl<T: HashAlgorithm> Session<T> {
         mut self,
         actuals: Vec<(KeyPath, KeyReadWrite)>,
     ) -> anyhow::Result<FinishedSession> {
-        // println!("[TRACER] Session::finish | Total Ops: {}", actuals.len());
-        // // --- 修改开始：遍历 actuals 打印读写意图 ---
-        // for (path, rw_op) in &actuals {
-        //     let key_log = format_key_log(path);
-        //     match rw_op {
-        //         // 只有 Write 操作
-        //         KeyReadWrite::Write(val) => {
-        //             println!("[TRACER] Op: WRITE         | Key: {} | NewVal: {}", key_log, format_val_log(val.as_deref()));
-        //             ;
-        //         },
-        //         // 先读后写 (ReadThenWrite)
-        //         KeyReadWrite::ReadThenWrite(old_val, new_val) => {
-        //             println!("[TRACER] Op: READ_mod_WRITE| Key: {} | OldVal: {} -> NewVal: {}", 
-        //                 key_log, 
-        //                 format_val_log(old_val.as_deref()), 
-        //                 format_val_log(new_val.as_deref())
-        //             );
-        //         },
-        //         // 只有 Read 操作 (通常用于生成 Witness 证明，不改变状态)
-        //         KeyReadWrite::Read(val) => {
-        //             // 如果你不想看纯读操作，可以注释掉下面这行
-        //             println!("[TRACER] Op: READ_ONLY     | Key: {} | Val: {}", key_log, format_val_log(val.as_deref()));
-        //         }
-        //     }
-        // }
-        // println!("[TRACER] Session::finish | Ops Log End");
-
-        // [DEBUG] 打印提交的 Key 数量
-        // let op_count = actuals.len();
-        // if op_count > 0 {
-        //      println!("[NOMT DEBUG] Session::finish called. Processing {} ops. (Writing to Merkle Tree...)", op_count);
-        // }
-
         if cfg!(debug_assertions) {
             // Check that the actuals are sorted by key path.
             for i in 1..actuals.len() {
@@ -766,19 +595,11 @@ impl<T: HashAlgorithm> Session<T> {
             .update_and_prove::<T>(compact_actuals, self.witness_mode.0)?;
 
         let mut tx = self.store.new_value_tx();
-        // [DEBUG] 追踪 Value 写入
-        let mut write_count = 0;
         for (path, read_write) in actuals {
             if let KeyReadWrite::Write(value) | KeyReadWrite::ReadThenWrite(_, value) = read_write {
                 tx.write_value::<T>(path, value);
-                write_count += 1;
             }
         }
-
-        // [DEBUG]
-        // if write_count > 0 {
-        //      println!("[NOMT DEBUG] Session::finish prepared value transaction with {} writes.", write_count);
-        // }
 
         let merkle_output = merkle_update_handle.join()?;
         Ok(FinishedSession {
@@ -855,9 +676,6 @@ impl FinishedSession {
     /// The changeset may be invalidated if another competing session, overlay, or rollback was
     /// committed.
     pub fn commit<T: HashAlgorithm>(self, nomt: &Nomt<T>) -> Result<(), anyhow::Error> {
-        // [DEBUG]
-        // println!("[NOMT DEBUG] FinishedSession::commit - Acquiring Global Lock & Flushing to Store...");
-
         let _write_guard = self.take_global_guard.then(|| nomt.access_lock.write());
 
         {
@@ -885,11 +703,7 @@ impl FinishedSession {
             self.merkle_output
                 .updated_pages
                 .into_frozen_iter(/* into_overlay */ false),
-        )?;
-        
-        // println!("[NOMT DEBUG] FinishedSession::commit - Done. (Data handed to OS/Disk)");
-
-        Ok(())
+        )
     }
 
     /// Commit this session to disk directly without blocking.
@@ -1148,5 +962,3 @@ mod tests {
         is_sync::<crate::Session<Blake3Hasher>>();
     }
 }
-
-

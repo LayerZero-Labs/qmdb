@@ -492,7 +492,6 @@ impl super::branch_updater::HandleNewBranch for NewBranchHandler {
                 user_data: 0,
             })
             .expect("I/O Pool Down");
-        crate::iostats::add_bbn(crate::io::PAGE_SIZE as u64);
 
         self.branches_tracker.insert(key, bbn, cutoff, page_number);
         Ok(())

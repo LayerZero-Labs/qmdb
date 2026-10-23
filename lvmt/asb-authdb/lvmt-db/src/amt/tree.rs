@@ -9,13 +9,6 @@ use crate::serde::{MyFromBytes, MyToBytes};
 use crate::storage::access::PUT_MODE;
 use crate::storage::{DBAccess, DBColumn, LayoutTrait};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering as AtomicOrd};
-
-/// Global counter: number of get_quotient_pow() calls (inner AMT node updates).
-/// Reset and printed each epoch in lvmt_db.rs commit().
-pub static QUOTIENT_POW_COUNT: AtomicU64 = AtomicU64::new(0);
-/// Global counter: number of update() calls (keys that go through AMT update).
-pub static AMT_UPDATE_COUNT: AtomicU64 = AtomicU64::new(0);
 
 pub trait AMTConfigTrait {
     type PE: PairingEngine<G1Projective = Self::Commitment>;
@@ -151,7 +144,6 @@ impl<C: AMTConfigTrait> AMTree<C> {
         }
 
         self.dirty = true;
-        AMT_UPDATE_COUNT.fetch_add(1, AtomicOrd::Relaxed);
 
         let inc_comm = self.pp.get_idents_pow(index, &update_fr_int);
 
@@ -174,7 +166,6 @@ impl<C: AMTConfigTrait> AMTree<C> {
                 continue;
             }
 
-            QUOTIENT_POW_COUNT.fetch_add(1, AtomicOrd::Relaxed);
             // let proof = self.pp.get_quotient(depth, index).mul(update_fr_int);
             let proof = self.pp.get_quotient_pow(depth, index, &update_fr_int);
             let node = self.inner_nodes.get_mut(&visit_node_index);

@@ -12,7 +12,6 @@ asb-profile = { workspace = true }
 authdb = { workspace = true }
 parity-journaldb = { workspace = true }
 kvdb = { workspace = true }
-cfx-kvdb-rocksdb = { workspace = true }
 lvmt-db = { workspace = true }
 patricia-trie-ethereum = { workspace = true }
 primitive-types = { workspace = true }

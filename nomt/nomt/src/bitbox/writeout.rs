@@ -18,7 +18,6 @@ pub(super) fn write_wal(mut wal_fd: &File, wal_blob: &[u8]) -> std::io::Result<(
     wal_fd.set_len(0)?;
     wal_fd.seek(SeekFrom::Start(0))?;
     wal_fd.write_all(wal_blob)?;
-    crate::iostats::add_wal(wal_blob.len() as u64);
     wal_fd.sync_all()?;
     Ok(())
 }
@@ -50,7 +49,6 @@ pub(super) fn write_ht(
                 user_data: 0,
             })
             .unwrap();
-        crate::iostats::add_ht(crate::io::PAGE_SIZE as u64);
         sent += 1;
     }
 

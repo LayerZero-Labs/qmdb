@@ -15,15 +15,7 @@ use nomt_core::{
     trie::Node,
 };
 use parking_lot::{Mutex, RwLock};
-use std::{
-    collections::HashMap,
-    fmt,
-    num::NonZeroUsize,
-    sync::{
-        atomic::{AtomicU64, Ordering}, // [ADDED]
-        Arc,
-    },
-};
+use std::{collections::HashMap, fmt, num::NonZeroUsize, sync::Arc};
 
 // Total number of nodes stored in one Page. It depends on the `DEPTH`
 // of the rootless sub-binary tree stored in a page following this formula:
@@ -234,8 +226,6 @@ struct Shared {
     page_rw_pass_domain: RwPassDomain,
     fixed_levels: usize,
     metrics: Metrics,
-    stats_hits: AtomicU64,
-    stats_total: AtomicU64,
 }
 
 fn shard_regions(num_shards: usize) -> Vec<(PageRegion, usize)> {
@@ -335,9 +325,6 @@ impl PageCache {
                 page_rw_pass_domain: domain,
                 metrics: metrics.into().unwrap_or(Metrics::new(false)),
                 fixed_levels: o.page_cache_upper_levels,
-                // [ADDED] Initialize stats
-                stats_hits: AtomicU64::new(0),
-                stats_total: AtomicU64::new(0),
             }),
         }
     }
@@ -360,34 +347,10 @@ impl PageCache {
     /// Returns `None` if not in the cache.
     pub fn get(&self, page_id: PageId) -> Option<(Page, BucketIndex)> {
         self.shared.metrics.count(Metric::PageRequests);
-        let total = self.shared.stats_total.fetch_add(1, Ordering::Relaxed) + 1;
-        let result = self.get_inner(page_id);
-        
-        if result.is_some() {
-             self.shared.stats_hits.fetch_add(1, Ordering::Relaxed);
-        } else {
-             self.shared.metrics.count(Metric::PageCacheMisses);
-        }
-
-        // [ADDED] Log Rate every 100 requests
-        if total % 100000 == 0 {
-            let hits = self.shared.stats_hits.load(Ordering::Relaxed);
-            let rate = (hits as f64 / total as f64) * 100.0;
-            eprintln!(
-                "[PageCache] Stats: Total={} Hits={} Rate={:.2}%",
-                total, hits, rate
-            );
-            self.log_usage_stats();
-        }
-        result
-    }
-
-    fn get_inner(&self, page_id: PageId) -> Option<(Page, BucketIndex)> {
         let shard_index = match self.shard_index_for(&page_id) {
             None => {
                 let cache_item = self.shared.root_page.read();
-                let cache_item_ref = cache_item.as_ref();
-                let cache_item = cache_item_ref?;
+                let cache_item = cache_item.as_ref()?;
                 return Some((
                     Page {
                         inner: cache_item.page_data.clone(),
@@ -399,14 +362,18 @@ impl PageCache {
         };
 
         let mut shard = self.shard(shard_index).locked.lock();
-        shard.get(self.shared.fixed_levels, &page_id).map(|cache_item| {
-             (
+        match shard.get(self.shared.fixed_levels, &page_id) {
+            Some(cache_item) => Some((
                 Page {
                     inner: cache_item.page_data.clone(),
                 },
                 cache_item.bucket_index,
-            )
-        })
+            )),
+            None => {
+                self.shared.metrics.count(Metric::PageCacheMisses);
+                None
+            }
+        }
     }
 
     /// Acquire a write pass for all pages in the cache.
@@ -514,50 +481,6 @@ impl PageCache {
     fn shard(&self, index: usize) -> &CacheShard {
         &self.shared.shards[index]
     }
-
-        /// 打印当前 PageCache 的详细内存占用统计
-/// 打印当前 PageCache 的详细内存占用统计
-    pub fn log_usage_stats(&self) {
-        let mut total_fixed_pages = 0;
-        let mut total_lru_pages = 0;
-        
-        // 1. 统计 Root Page
-        let root_occupied = if self.shared.root_page.read().is_some() { 1 } else { 0 };
-        
-        // 2. 统计所有 Shards
-        for shard in &self.shared.shards {
-            let guard = shard.locked.lock();
-            total_fixed_pages += guard.fixed_level_cache.len();
-            total_lru_pages += guard.cached.len();
-        }
-
-        let total_pages = root_occupied + total_fixed_pages + total_lru_pages;
-        
-        // 计算预估内存占用
-        let approx_bytes_per_entry = PAGE_SIZE + 200; 
-        let total_size_bytes = total_pages * approx_bytes_per_entry;
-        let total_size_mb = total_size_bytes as f64 / 1024.0 / 1024.0;
-
-        // 获取当前配置的固定层级
-        let current_fixed_level = self.shared.fixed_levels;
-
-        eprintln!(
-            "[PageCache Stats] \n\
-             \tConfigured Fixed Levels: {}  <-- (Depth <= {} are NEVER evicted)\n\
-             \tTotal Cached Pages: {}\n\
-             \t  - Root: {}\n\
-             \t  - Fixed Levels (Top of Tree): {}\n\
-             \t  - LRU (Bottom of Tree): {}\n\
-             \tApprox Memory Usage: {:.2} MB (Config Limit: 8 MB)",
-            current_fixed_level,      // 打印配置值
-            current_fixed_level,      // 再打印一次方便阅读含义
-            total_pages,
-            root_occupied,
-            total_fixed_pages,
-            total_lru_pages,
-            total_size_mb
-        );
-    }
 }
 
 impl Region for ShardIndex {
@@ -597,4 +520,3 @@ unsafe impl RegionContains<ShardIndex> for ShardIndex {
         }
     }
 }
-

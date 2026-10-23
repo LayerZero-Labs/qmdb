@@ -90,8 +90,6 @@ pub fn update(
     total_io += ln_freelist_pages.len();
     total_io += bbn_freelist_pages.len();
 
-    crate::iostats::add_ln((ln_freelist_pages.len() * crate::io::PAGE_SIZE) as u64);
-    crate::iostats::add_bbn((bbn_freelist_pages.len() * crate::io::PAGE_SIZE) as u64);
     crate::beatree::writeout::submit_freelist_write(&io_handle, &leaf_store, ln_freelist_pages);
     crate::beatree::writeout::submit_freelist_write(&io_handle, &bbn_store, bbn_freelist_pages);
 

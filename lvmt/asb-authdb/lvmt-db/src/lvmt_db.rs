@@ -1,7 +1,6 @@
 use std::collections::VecDeque;
 use std::io::Result;
 use std::sync::{Arc, RwLock};
-use std::time::Instant;
 
 use ethereum_types::H256;
 use global::Global;
@@ -9,12 +8,11 @@ use hashbrown::hash_map::Entry;
 // use hashbrown::hash_map::Entry;
 use hashbrown::HashMap;
 use keccak_hash::keccak;
-use kvdb::{DBKey, DBOp, DBTransaction, IoStatsKind, KeyValueDB};
+use kvdb::{DBKey, DBOp, DBTransaction, KeyValueDB};
 
 use lvmt_serde_derive::{MyFromBytes, MyToBytes};
 
-use crate::amt::{AMTData, AMTProof, AMTree, QUOTIENT_POW_COUNT, AMT_UPDATE_COUNT};
-use std::sync::atomic::Ordering as AtomicOrd;
+use crate::amt::{AMTData, AMTProof, AMTree};
 use crate::crypto::{
     export::{Fr, FrInt, G1Aff, G1Projective, G1},
     AMTParams, Pairing, TypeDepths, TypeUInt,
@@ -162,8 +160,6 @@ impl LvmtDB {
     }
 
     pub fn commit(&mut self, _epoch: u64) -> Result<(G1Projective, H256)> {
-        let t_commit_start = Instant::now();
-
         let epoch = self.current_epoch()?;
 
         // Within-epoch dedupe: keep only the last write per key.
@@ -185,48 +181,19 @@ impl LvmtDB {
         let mut hashes = Vec::with_capacity(kv_num);
         let mut write_ops = Vec::with_capacity(kv_num);
 
-        // Phase 1: version lookup + inc_key_ver + build write_ops
-        let t1 = Instant::now();
-        let mut stat_db_key_us: u128 = 0;
-        let mut stat_inc_ver_us: u128 = 0;
-        let mut stat_cache_hits: u64 = 0;
-        let mut stat_db_hits: u64 = 0;
-        let mut stat_db_found: u64 = 0;   // db lookup returned Some (existing key)
-        let mut stat_db_notfound: u64 = 0; // db lookup returned None (new key)
-        let mut stat_db_found_us: u128 = 0;
-        let mut stat_db_notfound_us: u128 = 0;
         for (position, key) in order.into_iter().enumerate() {
             let value = last_write
                 .remove(&key)
                 .expect("key removed from map twice (impossible)");
             let version: Option<VerInfo> = match self.cache.read().unwrap().get(&key).as_ref() {
-                Some(&(value, _)) => {
-                    stat_cache_hits += 1;
-                    value.clone().map(|x| x.version)
-                }
-                None => {
-                    let t_db = Instant::now();
-                    let v = match self.db_key.get(key.as_ref())? {
-                        None => None,
-                        Some(value) => Some(Value::from_bytes_local(&value)?.version),
-                    };
-                    let elapsed = t_db.elapsed().as_micros();
-                    stat_db_key_us += elapsed;
-                    stat_db_hits += 1;
-                    if v.is_some() {
-                        stat_db_found += 1;
-                        stat_db_found_us += elapsed;
-                    } else {
-                        stat_db_notfound += 1;
-                        stat_db_notfound_us += elapsed;
-                    }
-                    v
-                }
+                Some(&(value, _)) => value.clone().map(|x| x.version),
+                None => match self.db_key.get(key.as_ref())? {
+                    None => None,
+                    Some(value) => Some(Value::from_bytes_local(&value)?.version),
+                },
             };
 
-            let t_inc = Instant::now();
             let version = self.version_tree.inc_key_ver(&key, version);
-            stat_inc_ver_us += t_inc.elapsed().as_micros();
 
             let value = Value {
                 value: value.to_vec(),
@@ -256,41 +223,11 @@ impl LvmtDB {
 
             hashes.push(key_ver_value_hash);
         }
-        let t_ver_lookup_ms = t1.elapsed().as_millis();
-        let kv_num_u128 = kv_num as u128;
-        let db_hits_u128 = stat_db_hits as u128;
-        if raw_kv_num != kv_num {
-            println!(
-                "[dedupe] raw={} unique={} duplicates={}",
-                raw_kv_num, kv_num, raw_kv_num - kv_num
-            );
-        }
-        println!(
-            "[ver_lookup detail] cache_hits={} db_hits={} | db_key avg={:.1}us | inc_ver avg={:.1}us | db_key total={}ms | inc_ver total={}ms | found={} avg={:.1}us | notfound={} avg={:.1}us",
-            stat_cache_hits,
-            stat_db_hits,
-            if db_hits_u128 > 0 { stat_db_key_us as f64 / db_hits_u128 as f64 } else { 0.0 },
-            if kv_num_u128 > 0 { stat_inc_ver_us as f64 / kv_num_u128 as f64 } else { 0.0 },
-            stat_db_key_us / 1000,
-            stat_inc_ver_us / 1000,
-            stat_db_found,
-            if stat_db_found > 0 { stat_db_found_us as f64 / stat_db_found as f64 } else { 0.0 },
-            stat_db_notfound,
-            if stat_db_notfound > 0 { stat_db_notfound_us as f64 / stat_db_notfound as f64 } else { 0.0 },
-        );
-
-        // Phase 2: write_buffered for key column
-        let t2 = Instant::now();
         self.db_key.write_buffered(DBTransaction { ops: write_ops });
-        let t_write_buf_ms = t2.elapsed().as_millis();
 
-        // Phase 3: AMT commitment (version_tree.commit) — BLS12-381 crypto
-        let t3 = Instant::now();
+        // println!("commit position");
         let (amt_root, updates) = self.version_tree.commit(epoch, hashes.len() as u64);
-        let t_amt_ms = t3.elapsed().as_millis();
 
-        // Phase 4: Merkle tree + write_buffered for merkle column
-        let t4 = Instant::now();
         for (tree, version, commitment) in updates.into_iter() {
             let name_ver_value_hash = keccak(
                 &TreeValue {
@@ -312,46 +249,10 @@ impl LvmtDB {
                 value: (epoch + 1).to_bytes_local(),
             }],
         });
-        let t_merkle_ms = t4.elapsed().as_millis();
 
-        // Phase 5: flush to SSD (WAL + memtable flush)
-        let t5 = Instant::now();
         self.dirty_guard = false;
         self.kvdb.flush()?;
-        let t_flush_ms = t5.elapsed().as_millis();
-
-        // Block cache stats (requires enable_statistics=true in DatabaseConfig)
-        let io = self.kvdb.io_stats(IoStatsKind::SincePrevious);
-        let cache_hit_rate = if io.reads > 0 {
-            io.cache_reads as f64 / io.reads as f64 * 100.0
-        } else {
-            0.0
-        };
-        println!(
-            "[rocksdb io] reads={} cache_reads={} cache_hit={:.1}% writes={} bytes_read={}KB bytes_written={}KB",
-            io.reads, io.cache_reads, cache_hit_rate,
-            io.writes,
-            io.bytes_read / 1024,
-            io.bytes_written / 1024,
-        );
-
-        // Phase 6: clear cache
-        let t6 = Instant::now();
         self.cache.write().unwrap().clear();
-        let t_cache_clear_ms = t6.elapsed().as_millis();
-
-        let t_total_ms = t_commit_start.elapsed().as_millis();
-
-        // Read and reset per-epoch AMT instrumentation counters
-        let epoch_quotient_calls = QUOTIENT_POW_COUNT.swap(0, AtomicOrd::Relaxed);
-        let epoch_update_calls = AMT_UPDATE_COUNT.swap(0, AtomicOrd::Relaxed);
-
-        println!(
-            "[LVMT commit] total={}ms | ver_lookup={}ms | write_buf={}ms | amt_crypto={}ms | merkle={}ms | flush_ssd={}ms | cache_clear={}ms | kv_num={} | amt_update_calls={} | quotient_pow_calls={} | quotient_per_update={:.2}",
-            t_total_ms, t_ver_lookup_ms, t_write_buf_ms, t_amt_ms, t_merkle_ms, t_flush_ms, t_cache_clear_ms, kv_num,
-            epoch_update_calls, epoch_quotient_calls,
-            if epoch_update_calls > 0 { epoch_quotient_calls as f64 / epoch_update_calls as f64 } else { 0.0 }
-        );
 
         Ok((amt_root, merkle_root))
     }

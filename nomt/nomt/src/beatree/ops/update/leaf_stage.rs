@@ -721,7 +721,6 @@ impl super::leaf_updater::HandleNewLeaf for NewLeafHandler {
                 user_data: 0,
             })
             .expect("I/O Pool Down");
-        crate::iostats::add_ln(crate::io::PAGE_SIZE as u64);
 
         self.leaves_tracker.insert(key, leaf, cutoff, page_number);
         Ok(())

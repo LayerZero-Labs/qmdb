@@ -1,84 +1,54 @@
 use asb_options::Options;
 use asb_profile::CounterTrait;
 use authdb::AuthDB;
-use cfx_kvdb_rocksdb::{CompactionProfile, Database, DatabaseConfig};
 use kvdb::KeyValueDB;
+use lvmt_db::crypto::export::ProjectiveCurve;
 use lvmt_db::{
-    lvmt_db::{cached_pp, LvmtDB, INC_KEY_COUNT, INC_KEY_LEVEL_SUM, INC_TREE_COUNT, NUM_COLS},
+    lvmt_db::{cached_pp, LvmtDB, INC_KEY_COUNT, INC_KEY_LEVEL_SUM, INC_TREE_COUNT},
     multi_layer_amt::Key,
     storage::access::PUT_COUNT,
 };
-use std::path::Path;
 use std::sync::Arc;
-
-// Matches adapter's MEMORY_MB constant exactly
-const MEMORY_MB: usize = 2048;
 
 pub struct Lvmt {
     amt: LvmtDB,
+    print_root_period: Option<usize>,
 }
 
 pub fn new(backend: Arc<dyn KeyValueDB>, opts: &Options) -> Lvmt {
     let pp = cached_pp("./pp");
     pp.warm_quotient();
-
-    // Drop externally-opened backend to release RocksDB lock,
-    // then reopen with adapter's exact configuration.
-    drop(backend);
-
-    let mut db_config = DatabaseConfig::with_columns(NUM_COLS);
-    db_config.memory_budget = Some(MEMORY_MB);
-    db_config.compaction = CompactionProfile::auto(Path::new(&opts.db_dir));
-    db_config.disable_wal = false;
-    db_config.enable_statistics = true;
-
-    // Print all effective RocksDB configuration values before opening
-    let mem_total_mb = db_config.memory_budget.unwrap_or(128);
-    let mem_per_col_mb = mem_total_mb / NUM_COLS as usize;
-    println!("[RocksDB config] columns={} memory_budget={}MiB memory_per_col={}MiB \
-              block_cache={}MiB write_buffer_per_col={}MiB \
-              compaction.initial_file_size={}MiB compaction.block_size={}KB \
-              compaction.write_rate_limit={:?} \
-              max_open_files={} disable_wal={} enable_statistics={} \
-              db_dir={}",
-        NUM_COLS,
-        mem_total_mb,
-        mem_per_col_mb,
-        mem_total_mb / 3,
-        mem_per_col_mb / 2,
-        db_config.compaction.initial_file_size / 1024 / 1024,
-        db_config.compaction.block_size / 1024,
-        db_config.compaction.write_rate_limit,
-        db_config.max_open_files,
-        db_config.disable_wal,
-        db_config.enable_statistics,
-        opts.db_dir,
-    );
-
-    let backend: Arc<dyn KeyValueDB> =
-        Arc::new(Database::open(&db_config, &opts.db_dir).expect("Failed to open RocksDB"));
-
-    // Same as adapter: shard_info = Some((4, 0)) when --shards 16
     let shard_info = opts.shards.map(|size| (size.trailing_zeros() as usize, 0));
     Lvmt {
         amt: LvmtDB::new(backend, pp, true, shard_info),
+        print_root_period: if opts.print_root {
+            Some(opts.report_epoch)
+        } else {
+            None
+        },
     }
 }
 
 impl AuthDB for Lvmt {
     fn get(&self, key: Vec<u8>) -> Option<Box<[u8]>> {
-        // Matches adapter: let _ = db.get(&k)
+        // println!("read");
         self.amt.get(&Key(key)).unwrap()
     }
 
     fn set(&mut self, key: Vec<u8>, value: Vec<u8>) {
-        // Matches adapter: db.set(&k, value.to_vec().into_boxed_slice())
+        // println!("write");
         self.amt.set(&Key(key), value.into_boxed_slice())
     }
 
     fn commit(&mut self, index: usize) {
-        // Matches adapter: db.commit(height as u64).unwrap() — return value dropped
-        self.amt.commit(index as u64).unwrap();
+        // println!("commit");
+        let (commit, root) = self.amt.commit(index as u64).unwrap();
+        if let Some(period) = self.print_root_period {
+            if index % period == 0 {
+                let aff_comm = commit.into_affine();
+                println!("Commitment {:?}, Merkle {:?}", aff_comm, root);
+            }
+        }
     }
 
     fn backend(&self) -> Option<&dyn KeyValueDB> {

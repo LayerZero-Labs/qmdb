@@ -6,14 +6,7 @@ use crate::{
 };
 use lru::LruCache;
 use parking_lot::{Mutex, MutexGuard};
-use std::{
-    collections::hash_map::RandomState,
-    hash::BuildHasher,
-    sync::{
-        atomic::{AtomicU64, Ordering}, // [ADDED] Import atomics
-        Arc,
-    },
-};
+use std::{collections::hash_map::RandomState, hash::BuildHasher, sync::Arc};
 
 /// A cache for leaf nodes.
 ///
@@ -39,9 +32,6 @@ impl LeafCache {
                     .map(Mutex::new)
                     .collect::<Vec<_>>(),
                 shard_assigner: RandomState::new(),
-                // [ADDED] Init counters
-                stats_hits: AtomicU64::new(0),
-                stats_total: AtomicU64::new(0),
             }),
         }
     }
@@ -49,29 +39,8 @@ impl LeafCache {
     /// Get a cache entry, updating the LRU state.
     pub fn get(&self, page_number: PageNumber) -> Option<Arc<LeafNode>> {
         let mut shard = self.inner.shard_for(page_number);
-        let result = shard.cache.get(&page_number).map(|x| x.clone());
 
-        // [MODIFIED] Calculate and Log Hit Rate
-        let total = self.inner.stats_total.fetch_add(1, Ordering::Relaxed) + 1;
-        let is_hit = result.is_some();
-        if is_hit {
-            self.inner.stats_hits.fetch_add(1, Ordering::Relaxed);
-        }
-
-        // 没必要每次都打印，每 100 次或 1000 次请求打印一次摘要
-        if total % 100000 == 0 {
-            let hits = self.inner.stats_hits.load(Ordering::Relaxed);
-            let rate = (hits as f64 / total as f64) * 100.0;
-            eprintln!(
-                "[LeafCache] Stats: Total={} Hits={} Rate={:.2}% (Last operation: {})",
-                total,
-                hits,
-                rate,
-                if is_hit { "HIT" } else { "MISS" }
-            );
-        }
-
-        result
+        shard.cache.get(&page_number).map(|x| x.clone())
     }
 
     /// Insert a cache entry. Evicts LRU items to maintain max_items limit.
@@ -99,9 +68,6 @@ impl LeafCache {
 struct Shared {
     shards: Vec<Mutex<Shard>>,
     shard_assigner: RandomState,
-    // [ADDED] Global stats for this cache instance
-    stats_hits: AtomicU64,
-    stats_total: AtomicU64,
 }
 
 impl Shared {

@@ -484,10 +484,7 @@ impl Database {
             write_opts,
             block_opts,
             stats: stats::RunningDbStats::new(),
-            // MyStat accumulates per-read data in unbounded Vecs/HashMaps — disabled
-            // regardless of enable_statistics to avoid OOM with large datasets.
-            // RocksDB engine stats (block cache hit rate) still work via get_statistics().
-            my_stat: RwLock::new(MyStat::new(false)),
+            my_stat: RwLock::new(MyStat::new(config.enable_statistics)),
         })
     }
 

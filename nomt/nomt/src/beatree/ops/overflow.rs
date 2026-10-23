@@ -81,7 +81,6 @@ pub fn chunk(
             user_data: 0,
         };
         io_handle.send(command).expect("I/O Pool Down");
-        crate::iostats::add_ln(crate::io::PAGE_SIZE as u64);
     }
     assert!(value.is_empty());
 

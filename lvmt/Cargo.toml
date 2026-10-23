@@ -32,7 +32,6 @@ kvdb07 = { package="kvdb",version="0.7" }
 # Backend Implementations
 kvdb-memorydb = "0.4.0"
 libmdbx = "0.1.12"
-cfx-kvdb-rocksdb = { path = "asb-backend/cfx-kvdb-rocksdb" }
 
 # Utils
 malloc_size_of = { git = "https://github.com/Conflux-Chain/conflux-rust.git", rev = "9de2cc9"}
