@@ -24,13 +24,9 @@ use hashbrown::HashMap;
 use qmdb_common::def::{LEAF_COUNT_IN_TWIG, TWIG_ROOT_LEVEL, TWIG_SHIFT};
 use qmdb_common::merkletree::multiproof::{MultiProof, TwigProof};
 
-// ---------------------- Generic PartialMerkleTree builder ----------------------
-
 use qmdb_common::merkletree::multiproof::compute_matched_nodes;
 
 use qmdb_common::merkletree::multiproof::build_partial_merkle_tree;
-
-// ---------------------- Building from Tree ----------------------
 
 impl Tree {
     pub fn get_multi_proof(&self, sns: &[u64]) -> Result<MultiProof, String> {
@@ -141,8 +137,6 @@ impl Tree {
         })
     }
 }
-
-// ---------------------- Serialization helpers (tests use borsh directly) ----------------------
 
 #[cfg(test)]
 mod tests {

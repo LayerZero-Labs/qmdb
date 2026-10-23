@@ -24,7 +24,6 @@ use qmdb_common::def::{BIG_BUF_SIZE, BYTES_CACHE_SHARD_COUNT};
 use qmdb_common::utils::{new_big_buf_boxed, BigBuf};
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::time::Instant;
 
 const VALUE_LENGTH_BITS: usize = 16;
 const IDX_BITS: usize = 16;
@@ -256,58 +255,6 @@ impl<KT: Hash + Eq + Clone> BytesCache<KT> {
         let pos = make_cache_pos(idx, offset, bz.len());
         shard.insert(cache_key, pos);
     }
-    // pub fn insert(&self, cache_key: &KT, idx: usize, bz: &[u8]) {
-    //     let start_time = Instant::now();
-    //     let size = bz.len();
-
-    //     // [探针 1] 记录拿读锁的时间
-    //     let t0 = Instant::now();
-    //     let needs_alloc = {
-    //         let shard = self.shards[idx].read();
-    //         let needs_new_buf = shard.buf_list.is_empty() 
-    //             || (shard.curr_offset as usize + size > BIG_BUF_SIZE);
-    //         needs_new_buf && shard.free_list.is_empty()
-    //     }; 
-    //     let t_read_lock_micros = t0.elapsed().as_micros();
-
-    //     // [探针 2] 记录向系统申请内存的时间
-    //     let t1 = Instant::now();
-    //     let mut pre_allocated_buf = None;
-    //     if needs_alloc {
-    //         pre_allocated_buf = Some(new_big_buf_boxed());
-    //     }
-    //     let t_alloc_micros = t1.elapsed().as_micros();
-
-    //     // [探针 3] 记录拿写锁的时间
-    //     let t2 = Instant::now();
-    //     let mut shard = self.shards[idx].write();
-    //     let t_write_lock_micros = t2.elapsed().as_micros();
-
-    //     // [探针 4] 记录纯粹写数据的耗时
-    //     let t3 = Instant::now();
-    //     if let Some(new_buf) = pre_allocated_buf {
-    //         shard.free_list.push(new_buf);
-    //     }
-
-    //     let (buf_idx, offset) = shard.fill(bz);
-    //     let pos = make_cache_pos(buf_idx, offset, bz.len());
-    //     shard.insert(cache_key, pos);
-    //     let t_work_micros = t3.elapsed().as_micros();
-
-    //     let total_ms = start_time.elapsed().as_millis();
-        
-    //     // 耗时 > 50ms 报警
-    //     if total_ms > 50 {
-    //         println!(
-    //             "⚠️ CACHE INSERT SLOW | total={}ms | read_lock={}ms | alloc={}ms | write_lock={}ms | work={}ms",
-    //             total_ms,
-    //             t_read_lock_micros as f64 / 1000.0,
-    //             t_alloc_micros as f64 / 1000.0,
-    //             t_write_lock_micros as f64 / 1000.0,
-    //             t_work_micros as f64 / 1000.0
-    //         );
-    //     }
-    // }
 
     /// Inserts bytes into the cache only if the key doesn't already exist.
     ///
@@ -325,47 +272,6 @@ impl<KT: Hash + Eq + Clone> BytesCache<KT> {
         let pos = make_cache_pos(idx, offset, bz.len());
         shard.insert(cache_key, pos);
     }
-    // pub fn insert_if_missing(&self, cache_key: &KT, idx: usize, bz: &[u8]) {
-    //     let size = bz.len();
-
-    //     // 1. 同样先用读锁探测
-    //     let needs_alloc = {
-    //         let shard = self.shards[idx].read();
-    //         // 如果 key 已经存在，连内存都不用申请了，直接返回
-    //         if shard._contains(cache_key) {
-    //             return;
-    //         }
-    //         let needs_new_buf = shard.buf_list.is_empty() 
-    //             || (shard.curr_offset as usize + size > BIG_BUF_SIZE);
-    //         needs_new_buf && shard.free_list.is_empty()
-    //     };
-
-    //     // 2. 无锁状态下慢吞吞地分配内存
-    //     let mut pre_allocated_buf = None;
-    //     if needs_alloc {
-    //         pre_allocated_buf = Some(new_big_buf_boxed());
-    //     }
-
-    //     // 3. 拿写锁干活
-    //     let mut shard = self.shards[idx].write();
-        
-    //     // 双重检查：因为在我们分配内存的这段时间里，可能别的线程已经把这个 key 塞进去了
-    //     if shard._contains(cache_key) {
-    //         // 如果别人已经塞了，我们申请的 new_buf 就当做慈善捐给 free_list 了
-    //         if let Some(new_buf) = pre_allocated_buf {
-    //             shard.free_list.push(new_buf);
-    //         }
-    //         return;
-    //     }
-
-    //     if let Some(new_buf) = pre_allocated_buf {
-    //         shard.free_list.push(new_buf);
-    //     }
-
-    //     let (buf_idx, offset) = shard.fill(bz);
-    //     let pos = make_cache_pos(buf_idx, offset, bz.len());
-    //     shard.insert(cache_key, pos);
-    // }
 
     /// Looks up cached bytes by key and passes them to the provided function.
     ///
@@ -385,34 +291,6 @@ impl<KT: Hash + Eq + Clone> BytesCache<KT> {
         let shard = self.shards[idx].read();
         shard._read_bytes_at(cache_key, access)
     }
-    // pub fn lookup<F>(&self, cache_key: &KT, idx: usize, mut access: F)
-    // where
-    //     F: FnMut(&[u8]),
-    // {
-    //     let start_time = Instant::now();
-        
-    //     // [探针 1] 记录拿读锁的时间
-    //     let t0 = Instant::now();
-    //     let shard = self.shards[idx].read();
-    //     let t_read_lock_micros = t0.elapsed().as_micros();
-        
-    //     // [探针 2] 记录纯查找耗时
-    //     let t1 = Instant::now();
-    //     shard._read_bytes_at(cache_key, access);
-    //     let t_work_micros = t1.elapsed().as_micros();
-        
-    //     let total_ms = start_time.elapsed().as_millis();
-        
-    //     // 耗时 > 50ms 报警
-    //     if total_ms > 50 {
-    //         println!(
-    //             "⚠️ CACHE LOOKUP SLOW | total={}ms | read_lock={}ms | work={}ms",
-    //             total_ms,
-    //             t_read_lock_micros as f64 / 1000.0,
-    //             t_work_micros as f64 / 1000.0
-    //         );
-    //     }
-    // }
 
     pub fn contains(&self, cache_key: &KT, idx: usize) -> bool {
         let shard = self.shards[idx].read();

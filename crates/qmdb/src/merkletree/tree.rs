@@ -251,7 +251,6 @@ impl UpperTree {
     pub fn set_node_copy(&mut self, pos: NodePos, node: &[u8; 32]) {
         let mut n = [0; 32];
         n.copy_from_slice(node);
-        // self.nodes[pos.level() as usize][pos.nth() as usize % NODE_SHARD_COUNT].insert(pos, n);
         self.set_node(pos, n);
     }
 
@@ -542,7 +541,6 @@ pub struct Tree {
     /// ID of the most recently created twig    
     pub youngest_twig_id: u64,
     pub youngest_twig_is_empty: bool,
-    // pub active_bit_shards: [HashMap<u64, [u8; 256]>; TWIG_SHARD_COUNT],
     /// Active bits for each twig shard indicating entry status    
     pub active_bit_shards: Vec<HashMap<u64, ActiveBits>>,
     /// Merkle tree for the most recent twig being built
@@ -785,7 +783,6 @@ impl Tree {
             // when this is the last entry of current twig
             // write the merkle tree of youngest twig to twig_file
             self.sync_mt_for_youngest_twig(false);
-            //println!("GO shard={} twig_file_wr.append_twig", self.my_shard_id);
             self.twig_file_wr.append_twig(
                 &self.mtree_for_youngest_twig[..],
                 pos + entry_bz.len() as i64,
@@ -871,7 +868,6 @@ impl Tree {
         });
         mem::swap(&mut entry_file_tmp, &mut self.entry_file_wr);
         mem::swap(&mut twig_file_tmp, &mut self.twig_file_wr);
-        //println!("GO shard={} flush_files twig_file_size={}", self.my_shard_id, self.twig_file_wr.twig_file.hp_file.size());
         n_list
     }
 
@@ -1039,7 +1035,6 @@ impl Tree {
             // node is padding
             // return null hash
             if twig_id > self.youngest_twig_id {
-                //println!("XX6 {} {} null", level, nth);
                 return *get_null_hash_by_pos(level, nth);
             }
         }
@@ -1050,14 +1045,12 @@ impl Tree {
             let self_id: u64 = nth % level_stride;
             let idx = level_stride / 2 + self_id;
             if is_youngest_twig_id {
-                //println!("XX0");
                 return self.mtree_for_youngest_twig[idx as usize];
             } else {
                 let mut hash = [0u8; 32];
                 self.twig_file_wr
                     .twig_file
                     .get_hash_node(twig_id, idx as i64, cache, &mut hash);
-                //println!("XX1 twig_id={} yti={} idx={} nth={} level_stride={} self_id={}", twig_id, self.youngest_twig_id, idx, nth, level_stride, self_id);
                 return hash;
             }
         }
@@ -1071,20 +1064,12 @@ impl Tree {
             let self_id: u64 = (nth % level_stride) - level_stride / 2;
             if level == 8 {
                 let hash = active_bits.get_bits(self_id as usize, 32);
-                //println!("XX3");
                 return hash.try_into().unwrap();
             }
             let twig = self.upper_tree.active_twig_shards[s]
                 .get(&k)
                 .map(|t| &**t)
                 .unwrap_or(&NULL_TWIG);
-            //if level==9 && nth < 20 {
-            //    println!("HH NULL shard={} nth={} level=9 {} {} {}", self.my_shard_id, nth, self.upper_tree.active_twig_shards[s].contains_key(&k),
-            //    hex::encode(twig.active_bits_mtl1[self_id as usize]),
-            //    hex::encode(NULL_TWIG.active_bits_mtl1[self_id as usize]),
-            //        );
-            //}
-            //println!("XX4 {}", level);
             match level {
                 9 => return twig.active_bits_mtl1[self_id as usize],
                 10 => return twig.active_bits_mtl2[self_id as usize],
@@ -1095,7 +1080,6 @@ impl Tree {
 
         // upper tree
         if level == 12 {
-            //println!("XX12");
             return *self
                 .upper_tree
                 .get_twig_root(twig_id)
@@ -1194,4 +1178,3 @@ impl Tree {
         }
     }
 }
-

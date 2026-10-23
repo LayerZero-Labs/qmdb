@@ -29,9 +29,6 @@ impl Overlay {
     }
 
     pub fn add_kv(&mut self, k_in: u64, v_in: i64) {
-        //if k_in==0x6983c9d87fe60000 {
-        //    println!("add_kv {:#016x} {:#016x}", k_in, v_in);
-        //}
         let existed = !self.new_kv.insert((k_in, v_in));
         if existed {
             panic!("Add Duplicated KV: {k_in:?},{v_in:?}");
@@ -39,17 +36,11 @@ impl Overlay {
     }
 
     pub fn erase_kv(&mut self, k_in: u64, v_in: i64) {
-        //if k_in==0x6983c9d87fe60000 {
-        //    println!("erase_kv {:#016x} {:#016x}", k_in, v_in);
-        //}
         self.new_kv.remove(&(k_in, v_in));
         self.erased.insert(v_in);
     }
 
     pub fn change_kv(&mut self, k_in: u64, v_old: i64, v_new: i64) {
-        //if k_in==0x6983c9d87fe60000 {
-        //    println!("erase_kv {:#016x} {:#016x} {:#016x}", k_in, v_old, v_new);
-        //}
         self.erase_kv(k_in, v_old);
         self.add_kv(k_in, v_new);
     }
@@ -65,9 +56,6 @@ impl Overlay {
 
     pub fn get_prev_values(&self, k_in: u64) -> Option<(u64, ShortList)> {
         if self.new_kv.is_empty() {
-            //if k_in==0xd7e7ba8a03050000 {
-            //    println!("AA zero_len");
-            //}
             return None;
         }
         let mut list = ShortList::new();
@@ -80,17 +68,11 @@ impl Overlay {
             .next_back();
         last_opt?;
         let (last_k, _) = last_opt.unwrap();
-        //if k_in==0xd7e7ba8a03050000 {
-        //    println!("AA last_k={:#016x}", *last_k);
-        //}
         for &(k, v) in self
             .new_kv
             .range::<KV, (Bound<&KV>, Bound<&KV>)>(range)
             .rev()
         {
-            //if k_in==0xd7e7ba8a03050000 {
-            //    println!("AA k={:#016x} v={:#016x}", k, v);
-            //}
             if *last_k == k {
                 let v = v | (1i64 << 48); //bit#49 == 1 means prev key's value
                 list.append(v);

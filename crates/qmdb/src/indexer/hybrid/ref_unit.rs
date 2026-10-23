@@ -29,10 +29,6 @@ fn get_k(x: u128) -> u64 {
     (hi << 16) | (lo >> 48)
 }
 
-// fn get_idx(x: u128) -> u64 {
-//     (x >> 112) as u64
-// }
-
 impl Default for RefUnit {
     fn default() -> Self {
         Self::new()
@@ -55,9 +51,6 @@ impl RefUnit {
     }
 
     pub fn add_kv(&mut self, idx: u64, k_in: u64, v_in: i64) {
-        //if idx == 0xccc8 {
-        //    println!("HH.add {:#032x} {:#016x} {:#016x}", get_u128(idx, k_in, v_in), k_in, v_in);
-        //}
         let existed = !self.bt.insert(get_u128(idx, k_in, v_in));
         if existed {
             panic!("Add Duplicated KV");
@@ -101,7 +94,6 @@ impl RefUnit {
         }
         let mut start = get_u128(idx, k_in, 0);
         let mut end = get_u128(idx, k_in, MAX_POS);
-        //println!("JJ k_in={:#018x} {:#034x} -> {:#034x}", k_in, start, end);
         let mut range = (Included(&start), Included(&end));
         for &v in tree.range::<u128, (Bound<&u128>, Bound<&u128>)>(range) {
             if access(k_in, get_pos(v)) {
@@ -110,7 +102,6 @@ impl RefUnit {
         }
         end = start;
         start = get_u128(idx, 0, 0);
-        //println!("JJ2 {:#034x} -> {:#034x}", start, end);
         range = (Included(&start), Excluded(&end));
         let last = tree
             .range::<u128, (Bound<&u128>, Bound<&u128>)>(range)
@@ -150,15 +141,11 @@ impl RefUnit {
         }
         let start = get_u128(idx, 0, 0);
         let end = get_u128(idx, k_in, MAX_POS);
-        //println!("JJ k_in={:#018x} {:#034x} -> {:#034x}", k_in, start, end);
         let range = (Included(&start), Included(&end));
         let last = tree
             .range::<u128, (Bound<&u128>, Bound<&u128>)>(range)
             .next_back();
         if let Some(elem) = last {
-            //if get_idx(*elem) == 0xccc8 {
-            //    println!("HH {:#034x} {:#018x} {:#018x}", *elem, get_k(*elem), get_pos(*elem));
-            //}
             (get_k(*elem), get_pos(*elem))
         } else {
             panic!("get nothing in a non-empty tree");
@@ -177,7 +164,6 @@ impl RefUnit {
     pub fn debug_get_adjacent(&self, k80: &[u8], idx: u64, k_in: u64) -> HashSet<i64> {
         let mut res = HashSet::new();
         self.for_each_adjacent_value(idx, k_in, |k, v| -> bool {
-            //println!("JJ2 {:#018x}", v);
             res.insert(v);
             false // do not exit loop
         });

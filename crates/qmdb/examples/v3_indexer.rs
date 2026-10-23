@@ -29,7 +29,6 @@ const CHG: u8 = 4;
 const ADD: u8 = 5;
 
 type IndexerToTest = HybridIndexer;
-//type IndexerToTest = InMemIndexer4Test;
 
 #[allow(unreachable_code)]
 fn main() {
@@ -56,7 +55,6 @@ fn init(rfu: &mut RefUnit, dut: &mut IndexerToTest) {
             dut.add_kv(&k80[..], sn as i64 * 8, sn);
             rfu.add_kv(sn, 0, sn as i64 * 8);
         }
-        //dut.dump_mem_to_file(shard_id);
     }
 }
 
@@ -133,9 +131,6 @@ fn run_at(
         ADD => {
             let (k, _v) = rfu.debug_get_kv(idx, k_in);
             if k_in != k {
-                //if k80[0]==0xc3 && k80[1]==0xfa {
-                //    println!("ADD k80={} k={:#016x} sn={:#016x}", hex::encode(&k80), k, sn);
-                //}
                 // k80 is a new key to add
                 rfu.add_kv(idx, k_in, *sn as i64 * 8);
                 dut.add_kv(&k80[..], *sn as i64 * 8, *sn);
@@ -148,9 +143,6 @@ fn run_at(
             // move k80 to an existing non-sentry slot
             if k != 0 {
                 BigEndian::write_u64(&mut k80[2..], k);
-                //if k80[0]==0xc3 && k80[1]==0xfa {
-                //    println!("DEL k80={} k={:#016x}", hex::encode(&k80), k);
-                //}
                 rfu.erase_kv(idx, k, v);
                 dut.erase_kv(&k80[..], v, v as u64 / 8);
                 his_entry.diff_vec.push(k80);
@@ -158,14 +150,8 @@ fn run_at(
         }
         CHG => {
             let (k, v) = rfu.debug_get_kv(idx, k_in);
-            //if k80[0]==0xc3 && k80[1]==0xfa {
-            //    println!("CHG initk80={}", hex::encode(&k80));
-            //}
             // move k80 to an existing slot
             BigEndian::write_u64(&mut k80[2..], k);
-            //if k80[0]==0xc3 && k80[1]==0xfa {
-            //    println!("CHG k80={} k={:#016x} v_old={:#016x}", hex::encode(&k80), k, v);
-            //}
             rfu.change_kv(idx, k, v, *sn as i64 * 8);
             dut.change_kv(&k80[..], v, *sn as i64 * 8, v as u64 / 8, *sn);
             his_entry.diff_vec.push(k80);
@@ -174,18 +160,12 @@ fn run_at(
         FEV => {
             let (k, _) = rfu.debug_get_kv(idx, k_in);
             // move k80 to an existing slot
-            //if k80[0]==0xc3 && k80[1]==0xfa {
-            //    println!("FEV k80={} k={:#016x}", hex::encode(&k80), k);
-            //}
             BigEndian::write_u64(&mut k80[2..], k);
             let _ = dut.for_each_value(height, &k80[..]);
         }
         FEA => {
             let k = BigEndian::read_u64(&k80[2..]);
             if k != 0 {
-                //if k80[0]==0xc3 && k80[1]==0xfa {
-                //    println!("FEA k80={} k={:#016x}", hex::encode(&k80), k);
-                //}
                 let _ = dut.for_each_adjacent_value(height, &k80[..]);
                 // record historical for-each-adjacent access
                 his_entry.fe_vec.push(k80);
@@ -218,7 +198,6 @@ fn num_to_k80(num: u64) -> [u8; 10] {
 fn allocate_indexer_entries(_randsrc: &mut RandSrc, count: u64) {
     let mut buf = [0u8; 8];
     let indexer = Arc::new(InMemIndexer::new(256));
-    //InMemIndexer::start_compacting(indexer.clone());
     let step = count / 1024;
     for i in 0..count {
         if i % step == 0 {
