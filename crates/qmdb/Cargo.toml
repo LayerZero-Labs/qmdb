@@ -41,7 +41,6 @@ bytes = { workspace = true }
 itertools = { workspace = true }
 once_cell = { workspace = true }
 qmdb-common = { workspace = true, default-features = true }
-chrono = { workspace = true, features = ["serde"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 io-uring = { workspace = true }

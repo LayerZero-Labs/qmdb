@@ -93,12 +93,6 @@
 
 #![allow(clippy::too_many_arguments)]
 extern crate core;
-
-/// When false (default), all timing instrumentation and diagnostic prints are
-/// compiled away to zero-overhead dead-code elimination. Set to true to enable
-/// detailed pipeline and performance logging.
-pub const VERBOSE: bool = false;
-
 pub mod compactor;
 pub mod config;
 pub mod entryfile;

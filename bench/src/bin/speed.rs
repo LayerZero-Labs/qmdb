@@ -127,13 +127,6 @@ struct SingleHoverBlockConfig<'a> {
     pre_sampled: Option<&'a [u64]>,
 }
 
-use qmdb::VERBOSE;
-macro_rules! vprintln {
-    ($($arg:tt)*) => {
-        if VERBOSE { println!($($arg)*); }
-    };
-}
-
 fn main() {
     let args: Cli = Cli::parse();
     let start_from_existing = args.start_from_existing;
@@ -417,12 +410,8 @@ fn run(
             }
             
             // 2. 提交block至backend database
-            vprintln!("PIPELINE_LOG: CLIENT_GENERATE_END height={} timestamp={}", height, Utc::now().to_rfc3339());
-            vprintln!("PIPELINE_LOG: CLIENT_SUBMIT_START height={} timestamp={}", height, Utc::now().to_rfc3339());
             db_backend::create_kv(table_id, height, task_list);
-            vprintln!("PIPELINE_LOG: CLIENT_SUBMIT_END height={} timestamp={}", height, Utc::now().to_rfc3339());
             height += 1;
-            vprintln!("PIPELINE_LOG: CLIENT_GENERATE_START height={} timestamp={}", height, Utc::now().to_rfc3339());
 
             results.update_entries_in_db((produced_blocks + 1) * test_gen.num_op_in_blk());
 
@@ -868,10 +857,7 @@ fn hover_execute_op(config: HoverExecuteConfig) {
         while let Ok((blk_height, tasks)) = rx.recv() {
             match op_type {
                 OP_CREATE => {
-                    vprintln!("PIPELINE_LOG: CLIENT_GENERATE_END height={} timestamp={}", blk_height, Utc::now().to_rfc3339());
-                    vprintln!("PIPELINE_LOG: CLIENT_SUBMIT_START height={} timestamp={}", blk_height, Utc::now().to_rfc3339());
                     db_backend::create_kv(table_id, blk_height, tasks);
-                    vprintln!("PIPELINE_LOG: CLIENT_SUBMIT_END height={} timestamp={}", blk_height, Utc::now().to_rfc3339());
                 },
                 OP_DELETE => db_backend::delete_kv(table_id, blk_height, tasks),
                 OP_WRITE => db_backend::update_kv(table_id, blk_height, tasks),
@@ -1191,25 +1177,9 @@ fn run_eth_replay_mode(
 
                 // 3. 检查 Block 是否已满 (达到 5000 tasks，即 100,000 ops)
                 if batch_tasks.len() >= tasks_per_block {
-                    vprintln!("PIPELINE_LOG: CLIENT_GENERATE_END height={} timestamp={}",
-                        global_db_height,
-                        Utc::now().to_rfc3339()
-                    );
-                    vprintln!("PIPELINE_LOG: CLIENT_SUBMIT_START height={} timestamp={}",
-                        global_db_height,
-                        Utc::now().to_rfc3339()
-                    );
                     db_backend::create_kv(table_id, global_db_height, batch_tasks);
-                    vprintln!("PIPELINE_LOG: CLIENT_SUBMIT_END height={} timestamp={}",
-                        global_db_height,
-                        Utc::now().to_rfc3339()
-                    );
                     global_db_height += 1;
                     batch_tasks = Vec::with_capacity(tasks_per_block); // 重置当前 Block
-                    vprintln!("PIPELINE_LOG: CLIENT_GENERATE_START height={} timestamp={}",
-                        global_db_height,
-                        Utc::now().to_rfc3339()
-                    );
                 }
             }
         }
@@ -1228,20 +1198,8 @@ fn run_eth_replay_mode(
         batch_tasks.push(parking_lot::RwLock::new(Some(task)));
     }
     
-    vprintln!("PIPELINE_LOG: CLIENT_GENERATE_END height={} timestamp={}",
-        global_db_height,
-        Utc::now().to_rfc3339()
-    );
     if !batch_tasks.is_empty() {
-        vprintln!("PIPELINE_LOG: CLIENT_SUBMIT_START height={} timestamp={}",
-            global_db_height,
-            Utc::now().to_rfc3339()
-        );
         db_backend::create_kv(table_id, global_db_height, batch_tasks);
-        vprintln!("PIPELINE_LOG: CLIENT_SUBMIT_END height={} timestamp={}",
-            global_db_height,
-            Utc::now().to_rfc3339()
-        );        
         global_db_height += 1;
     }
 
@@ -1294,15 +1252,7 @@ fn run_eth_replay_mode(
     let (db_tx, db_rx) = std::sync::mpsc::sync_channel(10);
     let consumer_handle = std::thread::spawn(move || {
         while let Ok((blk_height, tasks)) = db_rx.recv() {
-            vprintln!("PIPELINE_LOG: CLIENT_SUBMIT_START height={} timestamp={}",
-                blk_height,
-                Utc::now().to_rfc3339()
-            );
             db_backend::update_kv(table_id, blk_height, tasks);
-            vprintln!("PIPELINE_LOG: CLIENT_SUBMIT_END height={} timestamp={}",
-                blk_height,
-                Utc::now().to_rfc3339()
-            );
         }
     });
 
@@ -1312,10 +1262,6 @@ fn run_eth_replay_mode(
     let mut interval_start = Instant::now();
     let mut interval_ops = 0;
 
-    vprintln!("PIPELINE_LOG: CLIENT_GENERATE_START height={} timestamp={}",
-        global_db_height,
-        Utc::now().to_rfc3339()
-    );
 
     rt.block_on(async {
         let mut eth_block_counter = 0;
@@ -1398,16 +1344,8 @@ fn run_eth_replay_mode(
 
                 if !task_list.is_empty() {
                     // 发送给官方的 consumer 线程处理
-                    vprintln!("PIPELINE_LOG: CLIENT_GENERATE_END height={} timestamp={}",
-                        global_db_height,
-                        Utc::now().to_rfc3339()
-                    );
                     db_tx.send((global_db_height as i64, std::mem::replace(&mut task_list, Vec::new()))).unwrap();
                     global_db_height += 1;
-                    vprintln!("PIPELINE_LOG: CLIENT_GENERATE_START height={} timestamp={}",
-                        global_db_height,
-                        Utc::now().to_rfc3339()
-                    );
                 }
                 eth_block_counter = 0;
             }
@@ -1422,10 +1360,6 @@ fn run_eth_replay_mode(
             }
         }
 
-        vprintln!("PIPELINE_LOG: CLIENT_GENERATE_END height={} timestamp={}",
-            global_db_height,
-            Utc::now().to_rfc3339()
-        );
         // 循环结束：处理尾部残余数据并发送
         if !current_cset.op_list.is_empty() {
             current_cset.sort();
@@ -1652,25 +1586,9 @@ fn run_eth_replay_inner(
 
                 // 3. 检查 Block 是否已满 (达到 5000 tasks，即 100,000 ops)
                 if batch_tasks.len() >= tasks_per_block {
-                    vprintln!("PIPELINE_LOG: CLIENT_GENERATE_END height={} timestamp={}",
-                        global_db_height,
-                        Utc::now().to_rfc3339()
-                    );
-                    vprintln!("PIPELINE_LOG: CLIENT_SUBMIT_START height={} timestamp={}",
-                        global_db_height,
-                        Utc::now().to_rfc3339()
-                    );
                     db_backend::create_kv(table_id, global_db_height, batch_tasks);
-                    vprintln!("PIPELINE_LOG: CLIENT_SUBMIT_END height={} timestamp={}",
-                        global_db_height,
-                        Utc::now().to_rfc3339()
-                    );
                     global_db_height += 1;
                     batch_tasks = Vec::with_capacity(tasks_per_block); // 重置当前 Block
-                    vprintln!("PIPELINE_LOG: CLIENT_GENERATE_START height={} timestamp={}",
-                        global_db_height,
-                        Utc::now().to_rfc3339()
-                    );
                 }
             }
         }
@@ -1689,20 +1607,8 @@ fn run_eth_replay_inner(
         batch_tasks.push(parking_lot::RwLock::new(Some(task)));
     }
     
-    vprintln!("PIPELINE_LOG: CLIENT_GENERATE_END height={} timestamp={}",
-        global_db_height,
-        Utc::now().to_rfc3339()
-    );
     if !batch_tasks.is_empty() {
-        vprintln!("PIPELINE_LOG: CLIENT_SUBMIT_START height={} timestamp={}",
-            global_db_height,
-            Utc::now().to_rfc3339()
-        );
         db_backend::create_kv(table_id, global_db_height, batch_tasks);
-        vprintln!("PIPELINE_LOG: CLIENT_SUBMIT_END height={} timestamp={}",
-            global_db_height,
-            Utc::now().to_rfc3339()
-        );        
         global_db_height += 1;
     }
 
@@ -1755,15 +1661,7 @@ fn run_eth_replay_inner(
     let (db_tx, db_rx) = std::sync::mpsc::sync_channel(10);
     let consumer_handle = std::thread::spawn(move || {
         while let Ok((blk_height, tasks)) = db_rx.recv() {
-            vprintln!("PIPELINE_LOG: CLIENT_SUBMIT_START height={} timestamp={}",
-                blk_height,
-                Utc::now().to_rfc3339()
-            );
             db_backend::update_kv(table_id, blk_height, tasks);
-            vprintln!("PIPELINE_LOG: CLIENT_SUBMIT_END height={} timestamp={}",
-                blk_height,
-                Utc::now().to_rfc3339()
-            );
         }
     });
 
@@ -1773,10 +1671,6 @@ fn run_eth_replay_inner(
     let mut interval_start = Instant::now();
     let mut interval_ops = 0;
 
-    vprintln!("PIPELINE_LOG: CLIENT_GENERATE_START height={} timestamp={}",
-        global_db_height,
-        Utc::now().to_rfc3339()
-    );
 
     rt.block_on(async {
         let mut eth_block_counter = 0;
@@ -1860,16 +1754,8 @@ fn run_eth_replay_inner(
 
                 if !task_list.is_empty() {
                     // 发送给官方的 consumer 线程处理
-                    vprintln!("PIPELINE_LOG: CLIENT_GENERATE_END height={} timestamp={}",
-                        global_db_height,
-                        Utc::now().to_rfc3339()
-                    );
                     db_tx.send((global_db_height as i64, std::mem::replace(&mut task_list, Vec::new()))).unwrap();
                     global_db_height += 1;
-                    vprintln!("PIPELINE_LOG: CLIENT_GENERATE_START height={} timestamp={}",
-                        global_db_height,
-                        Utc::now().to_rfc3339()
-                    );
                 }
                 eth_block_counter = 0;
             }
@@ -1884,10 +1770,6 @@ fn run_eth_replay_inner(
             }
         }
 
-        vprintln!("PIPELINE_LOG: CLIENT_GENERATE_END height={} timestamp={}",
-            global_db_height,
-            Utc::now().to_rfc3339()
-        );
         // 循环结束：处理尾部残余数据并发送
         if !current_cset.op_list.is_empty() {
             current_cset.sort();
