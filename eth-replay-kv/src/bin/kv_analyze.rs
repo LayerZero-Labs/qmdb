@@ -22,7 +22,6 @@ struct Args {
     input: String,
 }
 
-// --- [Hash & Sharding Functions] ---
 fn calculate_hash(key: &[u8]) -> [u8; 32] {
     let hash = blake3::hash(key);
     *hash.as_bytes()
@@ -186,9 +185,7 @@ async fn analyze_access_and_sharding(
         return Ok(());
     }
 
-    // =========================================================
     // Part A: Operation Type Stats
-    // =========================================================
     println!("\n--- Operation Type Distribution ---");
     println!("Total Operations: {}", total_ops);
     println!("  - Read:   {} ({:.2}%)", count_read, (count_read as f64 / total_ops as f64) * 100.0);
@@ -208,9 +205,7 @@ async fn analyze_access_and_sharding(
     let total_unique_keys = counts.len();
     println!("Total Unique Keys Touched: {}", total_unique_keys);
 
-    // =========================================================
     // Part B: Zipfian / Pareto Analysis
-    // =========================================================
     println!("\n--- Zipfian Distribution Analysis ---");
     let s = estimate_zipf_parameter(&counts);
     println!("Estimated Zipfian Skewness (s): {:.4}", s);
@@ -243,9 +238,7 @@ async fn analyze_access_and_sharding(
         }
     }
 
-    // =========================================================
     // Part C: Shard Distribution Analysis
-    // =========================================================
     println!("\n=== Shard Distribution Analysis (SHARD_COUNT = {}, Algo = Blake3) ===", SHARD_COUNT);
     
     println!("\n[A] Global Traffic Distribution (OPS per Shard)");

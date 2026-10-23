@@ -11,9 +11,7 @@ G_HW_MON_PID=""
 G_TARGET_PID=""
 G_RUN_FLAG=""
 
-# ==========================================
 # 1. 信号捕获与清理
-# ==========================================
 core_cleanup() {
     echo ""
     echo "🧹 [Core] Cleaning up..."
@@ -35,9 +33,7 @@ core_cleanup() {
 # 注册 Trap
 trap core_cleanup EXIT INT TERM
 
-# ==========================================
 # 2. 缓存清理 (需要 sudo 权限)
-# ==========================================
 drop_caches() {
     echo "Start Dropping caches..."
     sudo sync
@@ -46,9 +42,7 @@ drop_caches() {
     echo "Caches dropped."
 }
 
-# ==========================================
 # 3. 计算 CPU 绑核掩码 (Taskset)
-# ==========================================
 # 输入: LIMIT_CORES, HT_OFFSET
 # 输出: 打印 core range 字符串 (例如: 0-9,80-89)
 calc_cpu_range() {
@@ -79,9 +73,7 @@ calc_cpu_range() {
     fi
 }
 
-# ==========================================
 # 4. 启动监控 (统一: CPU + MEM(cgroup) + SSD -> hardware_usage.csv)
-# ==========================================
 # 参数1: 目标进程 PID
 # 参数2: 磁盘设备名 (e.g. md0)
 # 参数3: 日志输出目录
@@ -101,9 +93,7 @@ start_monitors() {
     G_HW_MON_PID=$!
 }
 
-# ==========================================
 # 5. 停止监控
-# ==========================================
 stop_monitors() {
     rm -f "$G_RUN_FLAG"
     wait "$G_HW_MON_PID" 2>/dev/null || true

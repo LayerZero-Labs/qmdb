@@ -2,15 +2,11 @@
 # run_qmdb_benchmark.sh
 set -euo pipefail
 
-# ==========================================
 # 0. Core Linux Level Monitor Library
-# ==========================================
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/monitor/bench_core.sh"
 command -v cargo >/dev/null 2>&1 || { echo "❌ cargo not found in PATH."; exit 1; }
 
-# ==========================================
 # 1. 自动检测 NUMA / UMA
-# ==========================================
 if [ -d /sys/devices/system/node/node1 ] && command -v numactl >/dev/null 2>&1; then
     IS_NUMA=true
     FIXED_CORE=40          # NUMA0 物理核心数
@@ -42,9 +38,7 @@ else
     echo "🔍 Detected: UMA machine (FIXED_CORE=${FIXED_CORE}, HT_OFFSET=${HT_OFFSET}, logical=${LOGICAL_CORES})"
 fi
 
-# ==========================================
 # 2. 全局配置
-# ==========================================
 USE_ETH=false
 START_FROM_EXISTING=false
 
@@ -100,9 +94,7 @@ CPU_LIST_NODE0_ALL=(
 120 124 128 132 136 140 144 148 152 156
 )
 
-# ==========================================
 # 3. 辅助函数 & 清理
-# ==========================================
 gen_cpu_list() {
     local n=$1
     local max=${#CPU_LIST_NODE0_ALL[@]}
@@ -137,9 +129,7 @@ on_exit() {
 }
 trap on_exit EXIT
 
-# ==========================================
 # 4. 核心执行函数
-# ==========================================
 # 参数 1: mem_tag   (例如 "BASELINE_Defaults" 或 "Memory_64G")
 # 参数 2: mem_limit (可选，例如 "64G"；留空表示不限制)
 # 参数 3: zipf_val  (可选，例如 "0.99"；留空表示不传参数，使用默认均匀随机)
@@ -172,7 +162,6 @@ run_experiment_set() {
             "$TARGET_FILE"
 
         cargo build --bin speed --release || exit 1
-        # cargo build --bin speed --release --features "qmdb/disable_dio" || exit 1
 
         EXP_DIR="results/${DB_NAME}/${MODE_DIR}/${mem_tag}/${EXP_TAG}"
         mkdir -p "$EXP_DIR"
@@ -223,9 +212,7 @@ run_experiment_set() {
     done
 }
 
-# ==========================================
 # 5. 主执行逻辑
-# ==========================================
 run_with_mem() {
     local mem_tag=$1
     local mem_limit=$2

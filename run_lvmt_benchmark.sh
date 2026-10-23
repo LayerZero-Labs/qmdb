@@ -4,18 +4,14 @@
 # 与 run_qmdb_benchmark.sh 保持相同的结构。
 set -euo pipefail
 
-# ==========================================
 # 0. Core Linux Level Monitor Library
-# ==========================================
 source /users/sijiec/os_monitor/bench_core.sh
 command -v cargo >/dev/null 2>&1 || { echo "❌ cargo not found in PATH."; exit 1; }
 
 # 16 RocksDB instances each open hundreds of fds; raise the limit.
 ulimit -n 65535 2>/dev/null || echo "⚠️  Could not raise fd limit (ulimit -n 65535). Run as root or set in /etc/security/limits.conf."
 
-# ==========================================
 # 1. 自动检测 NUMA / UMA
-# ==========================================
 if [ -d /sys/devices/system/node/node1 ] && command -v numactl >/dev/null 2>&1; then
     IS_NUMA=true
     FIXED_CORE=40          # NUMA0 物理核心数
@@ -34,27 +30,22 @@ else
     echo "🔍 Detected: UMA machine (FIXED_CORE=${FIXED_CORE}, HT_OFFSET=${HT_OFFSET})"
 fi
 
-# ==========================================
 # 2. 全局配置
-# ==========================================
 
-# ── 切换这两个 flag ──────────────────────────────────────────────
+# 切换这两个 flag
 # USE_ETH=true  → 使用真实 Ethereum workload（需要 ETH_TRACE_DIR 存在）
 # USE_ETH=false → 使用合成 workload（entry-count / ops-per-block 参数生效）
 USE_ETH=true
 ETH_TRACE_DIR="/mnt/ssd/real_eth_workload/kv_decompressed/"
-# ────────────────────────────────────────────────────────────────
 
 DB_NAME="LVMT"
 BINARY_PATH="./target/release/speed"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# ──────────────────────────────────────────────────────────────
 # 合成 workload 参数（USE_ETH=false 时生效）
 # LVMT commit 是严格串行的 BLS12-381 G1 加法，单核约 7000 ops/s。
 # ops_per_block=10000 → 每个 block commit 约 1.4s。
-# ──────────────────────────────────────────────────────────────
 BENCH_ARGS_BASE=(
   --db-dir /mnt/ssd/
   --ops-per-block 10000
@@ -71,9 +62,7 @@ if [ "$USE_ETH" = true ]; then
     BENCH_ARGS_BASE+=(--eth-trace-dir "$ETH_TRACE_DIR")
 fi
 
-# ==========================================
 # 3. 辅助函数 & 清理
-# ==========================================
 analyze_logs() {
     local log_file="$1"
     local time_stats="$2"
@@ -97,9 +86,7 @@ on_exit() {
 }
 trap on_exit EXIT
 
-# ==========================================
 # 4. 核心执行函数
-# ==========================================
 run_experiment() {
     local exp_tag=$1
     local entry_count=${2:-""}   # 仅合成模式使用
@@ -171,9 +158,7 @@ run_experiment() {
     sleep 5
 }
 
-# ==========================================
 # 5. 执行实验
-# ==========================================
 echo "🚀 Starting $DB_NAME Benchmark Series (ETH=$USE_ETH, MODE=$MODE_DIR)..."
 
 # Cargo.toml has two templates (LVMT-mode default, Reth-mode separate) because

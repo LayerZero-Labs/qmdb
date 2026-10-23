@@ -107,7 +107,6 @@ def finish_x(ax, max_min):
     ax.set_xlabel("Minutes from start")
 
 
-# ------------------------------ CPU ------------------------------
 def plot_cpu(df, target_dir, events):
     max_min = df["t_min"].max()
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
@@ -141,7 +140,6 @@ def plot_cpu(df, target_dir, events):
     print(f"[ok] {out}")
 
 
-# ------------------------------ SSD ------------------------------
 def plot_ssd(df, target_dir, events):
     max_min = df["t_min"].max()
     fig, axes = plt.subplots(4, 1, figsize=(12, 11), sharex=True)
@@ -185,7 +183,6 @@ def plot_ssd(df, target_dir, events):
     print(f"[ok] {out}")
 
 
-# ------------------------------ MEM ------------------------------
 def plot_mem(df, target_dir, events):
     max_min = df["t_min"].max()
     fig, ax = plt.subplots(figsize=(12, 6))

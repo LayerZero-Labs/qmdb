@@ -15,7 +15,7 @@
 use clap::Parser;
 use eth_replay_kv::{
     new_s3_client, parse_storage_path, run_block_data_producer,
-    BaseStateSplitter, InitDbBundle, Operation, PREFETCH_BUFFER_BLOCKS, StoragePath,
+    BaseStateSplitter, InitDbBundle, Operation, PREFETCH_BUFFER_BLOCKS,
 };
 use std::collections::HashMap;
 use std::fs::File;

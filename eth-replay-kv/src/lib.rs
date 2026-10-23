@@ -313,10 +313,6 @@ pub async fn run_ops_producer(
     Ok(())
 }
 
-// =============================================================================
-// Base state vs operations split (streaming + per-block)
-// =============================================================================
-
 /// Splits replay input into **base state** (init_db) and **per-block boundary ops**
 /// so that applying init_db then boundary_ops at each height matches the base_kv snapshots.
 ///

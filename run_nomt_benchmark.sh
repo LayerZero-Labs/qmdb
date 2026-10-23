@@ -2,15 +2,11 @@
 # run_nomt_benchmark.sh
 set -euo pipefail
 
-# ==========================================
 # 0. Core Linux Level Monitor Library
-# ==========================================
 source /users/sijiec/os_monitor/bench_core.sh
 command -v cargo >/dev/null 2>&1 || { echo "❌ cargo not found in PATH."; exit 1; }
 
-# ==========================================
 # 1. 自动检测 NUMA / UMA
-# ==========================================
 if [ -d /sys/devices/system/node/node1 ] && command -v numactl >/dev/null 2>&1; then
     IS_NUMA=true
     FIXED_CORE=40          # NUMA0 物理核心数
@@ -29,9 +25,7 @@ else
     echo "🔍 Detected: UMA machine (FIXED_CORE=${FIXED_CORE}, HT_OFFSET=${HT_OFFSET})"
 fi
 
-# ==========================================
 # 2. 全局配置
-# ==========================================
 USE_ETH=true
 START_FROM_EXISTING=false
 
@@ -78,9 +72,7 @@ CPU_LIST_NODE0_ALL=(
 120 124 128 132 136 140 144 148 152 156
 )
 
-# ==========================================
 # 3. 辅助函数 & 清理
-# ==========================================
 gen_cpu_list() {
     local n=$1
     local max=${#CPU_LIST_NODE0_ALL[@]}
@@ -115,9 +107,7 @@ on_exit() {
 }
 trap on_exit EXIT
 
-# ==========================================
 # 4. 核心执行函数
-# ==========================================
 run_experiment() {
     local buckets=$1
     local pc_size=$2
@@ -174,9 +164,7 @@ run_experiment() {
     sleep 5
 }
 
-# ==========================================
 # 5. 主执行逻辑
-# ==========================================
 [[ -f "$ADAPTER_FILE" ]] || { echo "❌ Adapter file not found: $ADAPTER_FILE"; exit 1; }
 
 run_experiment $DEF_BUCKETS $DEF_PC_SIZE $DEF_LC_SIZE $DEF_COMMIT $DEF_IO "BASELINE_Defaults"

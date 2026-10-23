@@ -40,7 +40,6 @@ usage() {
   sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
-# ----------------------------- parse args -----------------------------
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --system)               SYSTEM="$2"; shift 2;;
@@ -65,13 +64,11 @@ done
 
 [[ -n "$SYSTEM" ]] || { echo "❌ --system required"; usage; exit 1; }
 
-# ----------------------------- load plugin -----------------------------
 PLUGIN="$ENGINE_DIR/systems/${SYSTEM}.sh"
 [[ -f "$PLUGIN" ]] || { echo "❌ no plugin: $PLUGIN"; exit 1; }
 # shellcheck source=/dev/null
 source "$PLUGIN"
 
-# ----------------------------- preflight -----------------------------
 command -v cargo >/dev/null 2>&1 || { echo "❌ cargo not in PATH"; exit 1; }
 [[ -d "$BASE_DIR" ]] || { echo "❌ base dir '$BASE_DIR' does not exist"; exit 1; }   # req(1)
 cd "$ENGINE_DIR"                                # build + run from repo root
@@ -128,7 +125,6 @@ if [[ $DO_PLOT == 1 ]]; then
   if ensure_plot_env; then PLOT_OK=1; else echo "⚠ plotting unavailable (will skip figures)"; fi
 fi
 
-# ----------------------------- expand sweep -----------------------------
 if [[ -n "$SWEEP" ]]; then
   SWEEP_KNOB="${SWEEP%%=*}"; IFS=',' read -ra SWEEP_VALUES <<< "${SWEEP#*=}"
 else
@@ -146,7 +142,6 @@ fi
 declare -f sys_set_defaults >/dev/null 2>&1 && sys_set_defaults
 [[ $REBUILD_PER_ITER == 0 ]] && { echo "🔨 building $SYS_NAME once..."; sys_build || exit 1; }
 
-# ----------------------------- run loop -----------------------------
 DB_DIR="$BASE_DIR/${SYS_DB_SUBDIR}"
 RUN_PID=""
 trap 'stop_monitors 2>/dev/null || true; [[ -n "$RUN_PID" ]] && kill "$RUN_PID" 2>/dev/null || true' EXIT INT TERM
