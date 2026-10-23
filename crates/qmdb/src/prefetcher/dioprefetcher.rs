@@ -80,6 +80,9 @@ struct RegisteredFiles {
     free_slots: Vec<u16>,
     /// Per shard: segments below this id have been pruned and are never registered again.
     pruned_below: [u64; SHARD_COUNT],
+    /// Slots whose clearing failed: they still hold a deleted segment, so they are retried
+    /// before they can be reused.
+    uncleared: Vec<u16>,
 }
 
 impl RegisteredFiles {
@@ -91,6 +94,7 @@ impl RegisteredFiles {
             pending_keys: HashSet::with_capacity(256),
             free_slots: Vec::with_capacity(256),
             pruned_below: [0; SHARD_COUNT],
+            uncleared: Vec::new(),
         }
     }
 
@@ -110,6 +114,42 @@ impl RegisteredFiles {
         None
     }
 
+    /// Applies the queued prune notifications, but only while no SQE is waiting in the
+    /// submission queue: a cleared slot must not be referenced by an unsubmitted SQE.
+    /// Otherwise they stay queued until the next call.
+    fn apply_prunes<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
+        &mut self,
+        ring: &mut IoUring<S, C>,
+        prunes: &mut Vec<PruneCmd>,
+    ) {
+        if prunes.is_empty() && self.uncleared.is_empty() {
+            return;
+        }
+        if !ring.submission().is_empty() {
+            return;
+        }
+        for slot in std::mem::take(&mut self.uncleared) {
+            self.clear_slot(ring, slot);
+        }
+        for cmd in prunes.drain(..) {
+            self.prune(ring, cmd.shard_id, cmd.end_seg_id as u64);
+        }
+    }
+
+    /// Clears `slot`, dropping this ring's reference to its file, and makes it reusable.
+    /// A failed clear (e.g. ENOMEM) is kept in `uncleared` and retried.
+    fn clear_slot<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
+        &mut self,
+        ring: &IoUring<S, C>,
+        slot: u16,
+    ) {
+        if ring.submitter().register_files_update(slot as u32, &[-1]).is_ok() {
+            self.free_slots.push(slot);
+        } else {
+            self.uncleared.push(slot);
+        }
+    }
+
     /// Unregisters every segment of `shard_id` below `end_seg_id`. Clearing a slot drops
     /// this ring's reference to the deleted segment file, so its disk space is released
     /// once in-flight reads of it complete, instead of when the process exits. The slot
@@ -126,9 +166,7 @@ impl RegisteredFiles {
         }
         for seg_id in start..end_seg_id {
             if let Some(slot) = self.key_to_slot.remove(&seg_key(shard_id, seg_id)) {
-                // On failure the slot still holds the file until it is reused.
-                let _ = ring.submitter().register_files_update(slot as u32, &[-1]);
-                self.free_slots.push(slot);
+                self.clear_slot(ring, slot);
             }
         }
         let is_pruned = |key: u64| key_shard(key) == shard_id && key_seg(key) < end_seg_id;
@@ -1065,13 +1103,15 @@ impl JobManager {
             Some(())
         }
 
-        // Prune notifications received while blocked on the job channel.
+        // Prune notifications not yet applied (received while blocked on the job channel,
+        // or deferred while SQEs were still queued).
         let mut prunes: Vec<PruneCmd> = Vec::new();
 
         loop {
             while let Ok(cmd) = prune_receiver.try_recv() {
-                registered_files.prune(&ring, cmd.shard_id, cmd.end_seg_id as u64);
+                prunes.push(cmd);
             }
+            registered_files.apply_prunes(&mut ring, &mut prunes);
 
             let mut sq = ring.submission();
             // If we pushed any SQEs in this iteration, prefer waiting for a minimal number of CQEs
@@ -1140,9 +1180,7 @@ impl JobManager {
             }
             drop(sq);
 
-            for cmd in prunes.drain(..) {
-                registered_files.prune(&ring, cmd.shard_id, cmd.end_seg_id as u64);
-            }
+            registered_files.apply_prunes(&mut ring, &mut prunes);
             // Process pending fd registrations (after submission queue is released)
             registered_files.flush_pending(&ring);
 

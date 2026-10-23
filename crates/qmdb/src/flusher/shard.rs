@@ -239,9 +239,9 @@ impl FlusherShard {
                 // may fail or return garbage due to closed/reused file descriptors.
                 // prune_twigs deletes every entry-file segment below ef_size. Tell the io_uring
                 // workers first, so they unregister those segments and the disk space is
-                // released now rather than when the process exits. A command covers all earlier
-                // ones, so try_send loses nothing that matters if the channel is full (it only
-                // fills without the DIO prefetcher, where nothing reads it).
+                // released now rather than when the process exits. try_send cannot fail on the
+                // unbounded channel used with the DIO prefetcher; without it nothing reads the
+                // bounded channel, so a dropped command does not matter.
                 let segment_size = self.tree.get_entry_file_segment_size();
                 let _ = prune_sender.try_send(PruneCmd {
                     shard_id: self.shard_id,

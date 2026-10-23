@@ -318,6 +318,12 @@ impl AdsCore {
         let (ciphers, idx_cipher, meta_db_cipher) = get_ciphers(aes_keys);
         let (data_dir, meta_dir, indexer_dir) = Self::get_sub_dirs(dir);
         
+        // With the DIO prefetcher every prune notification must arrive, since it releases
+        // disk space, so the channel is unbounded. Without it nothing reads the channel, so
+        // it is bounded and the flusher's try_send drops what does not fit.
+        #[cfg(all(target_os = "linux", not(feature = "disable_dio")))]
+        let (prune_sender, prune_receiver) = unbounded();
+        #[cfg(not(all(target_os = "linux", not(feature = "disable_dio"))))]
         let (prune_sender, prune_receiver) = bounded(1024);
 
         let indexer = Arc::new(Indexer::with_dir_and_cipher(indexer_dir, idx_cipher));
