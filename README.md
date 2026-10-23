@@ -183,6 +183,7 @@ the LVMT adapter loads its precomputed parameters from `../lvmt/pp`.
 cd bench
 ulimit -n 65535
 ARGS="--ops-per-block 100000 --rayon-threads 16 --randsrc-filename /mnt/ssd/randsrc.dat"
+export NOMT_BUCKETS=4000000   # NOMT preallocates 4 KiB of SSD per bucket: 16 GB here
 mkdir -p /mnt/ssd/qmdb_smoke
 ~/bin/speed_qmdb --db-dir /mnt/ssd/qmdb_smoke --entry-count 2000000 --hover-interval 10 --hover-write-block 5 --hover-recreate-block 5 $ARGS
 for b in nomt lvmt reth; do
@@ -281,10 +282,9 @@ cargo run --release --bin gen-init-db -- --start-height 15012300 --end-height 20
 > **TODO(release): known differences between this repository and the runs in the paper.** Resolve each, or state it here:
 > 1. **Read timing.** The July–September QMDB runs stopped the Read timer once outstanding prefetch reads had drained; this repository's `speed` stops it when `flush()` returns, with part of the phase's reads still in flight, so it reports higher Read throughput.
 > 2. **Phase size.** The paper states 50M operations per phase. Baselines used 500-block (50M) phases; the plotted QMDB means used 50-block (5M) phases, which is the default in `systems/qmdb.sh`.
-> 3. **NOMT configuration.** The paper used a 16 GiB page cache, a 10 GiB leaf cache and a hash-table size per state size (below); `bench/src/speed/nomt_adapter.rs` currently hard-codes a 1 MiB page cache, no leaf cache and 248,354,236 buckets.
-> 4. **Memory cap.** NOMT's and QMDB's `c7gd.metal` Ethereum replays and the runs for Figs. 7, 9 and 10 and the x86 comparison ran without the 32 GiB cap.
-> 5. **Missing experiment switches.** The read/write-ratio sweep, the pipelining-off ablation and the hybrid-indexer memory sweep used `HOVER_RW_RATIOS`, a `pipeline_off` feature and a `qmdbhybrid` plugin that are not in this repository yet.
-> 6. **Analysis scripts.** The log parsers, plot scripts and raw logs behind each figure are not in this repository yet.
+> 3. **Memory cap.** NOMT's and QMDB's `c7gd.metal` Ethereum replays and the runs for Figs. 7, 9 and 10 and the x86 comparison ran without the 32 GiB cap.
+> 4. **Missing experiment switches.** The read/write-ratio sweep, the pipelining-off ablation and the hybrid-indexer memory sweep used `HOVER_RW_RATIOS`, a `pipeline_off` feature and a `qmdbhybrid` plugin that are not in this repository yet.
+> 5. **Analysis scripts.** The log parsers, plot scripts and raw logs behind each figure are not in this repository yet.
 
 ### 7.2 Database-size sweep (Fig. 5 and Fig. 8)
 
@@ -308,13 +308,15 @@ Baselines (example: NOMT at 1.5B; replace the binary for LVMT and Reth):
 ```bash
 cd bench
 sudo systemd-run --scope -p MemoryMax=32G -p MemoryHigh=32G \
-  prlimit --nofile=1048576:1048576 taskset -c 0-63 \
+  env NOMT_BUCKETS=575546222 prlimit --nofile=1048576:1048576 taskset -c 0-63 \
   ~/bin/speed_nomt --db-dir /mnt/ssd --entry-count 1500000000 --ops-per-block 100000 \
     --hover-write-block 500 --hover-recreate-block 500 --hover-interval 30000 \
     --rayon-threads 64 --randsrc-filename /mnt/ssd/randsrc.dat --output-filename nomt_1500M.json \
   2>&1 | tee nomt_1500M.log
 ```
-<!-- TODO(release): make NOMT's page/leaf cache sizes and bucket count configurable (flags or NOMT_* env vars) and give the per-size values here. -->
+NOMT reads its bucket count from `NOMT_BUCKETS` (values in the table above; the default is 575,546,222) and preallocates
+4 KiB of SSD per bucket, about 2.4 TB at 575,546,222 buckets. Its page and leaf caches are fixed at 16 GiB and 10 GiB in
+`bench/src/speed/nomt_adapter.rs`.
 
 ### 7.3 Ethereum mainnet replay (Fig. 6)
 
@@ -509,7 +511,6 @@ Questions and problems: please open a GitHub issue.
 <!-- Remove this section before tagging the release. -->
 - [ ] Merge the measurement harness used for the paper's July–September runs (read-drain timing, `HOVER_RW_RATIOS`,
       `pipeline_off`, `qmdbhybrid` and `qmdb_nopipe` plugins) or document every difference in 7.1.
-- [ ] Make NOMT's cache sizes and bucket count configurable and document the per-figure values.
 - [ ] Resolve the LVMT licensing question (Section 9).
 - [ ] Publish the Ethereum operation files and the InitDbBundle with checksums on an archival host; add the URL list and download script.
 - [ ] Reconcile the Ethereum window's data coverage with the paper's block and transaction counts.

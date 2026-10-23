@@ -43,10 +43,14 @@ pub fn init(db_dir: &str, start_from_existing: bool) {
     opts.io_workers(32);
     opts.metrics(true); 
     opts.prepopulate_page_cache(true);
-    opts.hashtable_buckets(248354236); 
+    // Hashtable buckets per state size, from NOMT_BUCKETS: 39073369 for 100M entries,
+    // 93329983 for 300M, 248354236 for 600M, 575546222 for 900M-1.5B.
+    let buckets: u32 = std::env::var("NOMT_BUCKETS").ok().and_then(|s| s.parse().ok()).unwrap_or(575_546_222u32);
+    println!("[NOMT] hashtable_buckets={} ({:.0}M)", buckets, buckets as f64 / 1_000_000.0);
+    opts.hashtable_buckets(buckets);
     opts.page_cache_upper_levels(2);
-    opts.page_cache_size(1);
-    opts.leaf_cache_size(0);
+    opts.page_cache_size(16384); // MiB
+    opts.leaf_cache_size(10240); // MiB
 
     let nomt = Nomt::open(opts).unwrap();
     
