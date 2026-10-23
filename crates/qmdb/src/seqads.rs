@@ -196,7 +196,7 @@ impl SeqAds {
         self.shared_ads.clone()
     }
 
-    // ===== Helper methods =====
+    // Helper methods
 
     fn batch_to_changeset(&mut self, batch: &WriteBatch) -> Result<ChangeSet, String> {
         if batch.operations.is_empty() {
@@ -234,10 +234,6 @@ impl SeqAds {
         }
         change_set.sort();
         Ok(change_set)
-    }
-
-    fn check_key_existence(&self, key: &[u8]) -> Option<bool> {
-        self.key_to_existence.get(key).map(|entry| *entry.value())
     }
 
     fn ensure_key_existence_known(&mut self, key: &[u8]) {

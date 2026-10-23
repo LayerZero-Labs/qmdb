@@ -11,27 +11,24 @@ use crate::indexer::Indexer;
 use crate::tasks::TaskHub;
 use atomptr::{AtomPtr, Ref};
 use crossbeam::channel::{bounded, unbounded, Receiver, Sender};
-use hpfile::{AlignedBuf512, IO_BLK_SIZE};
+use hpfile::AlignedBuf512;
 use io_uring::{cqueue, opcode, squeue, types, IoUring};
 use log::debug;
 use qmdb_common::def::{DEFAULT_ENTRY_SIZE, OP_CREATE, OP_DELETE, SHARD_COUNT};
 use qmdb_common::entryfile::entry::EntryBz;
 use qmdb_common::entryfile::readbuf::ReadBuf;
 use qmdb_common::indexer::indexer_trait::IndexerTrait;
-use qmdb_common::task::taskid::{is_first_task_in_block, is_end_task_in_block, split_task_id};
+use qmdb_common::task::taskid::{is_first_task_in_block, split_task_id};
 use qmdb_common::utils::byte0_to_shard_id;
 use smallvec::SmallVec;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::iter::repeat_with;
 use std::os::unix::io::RawFd;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::usize;
 use threadpool::ThreadPool;
 use {std::fs::File, std::os::unix::io::AsRawFd};
-use chrono::Utc;
-use dashmap::DashMap;
-use crate::VERBOSE;
 
 const SC: Ordering = Ordering::SeqCst;
 pub const BLK_SIZE: i64 = 4096;
@@ -202,15 +199,6 @@ pub struct JobManager {
     uring_size: u32,
     /// 【added】
     pub prune_receiver: Option<Receiver<PruneCmd>>,
-
-    /// Per-block progress tracker for the `PREFETCHER_LEAVE (I/O complete)` marker.
-    ///
-    /// Key = block height. Value = atomic counters tracking how many tasks have been
-    /// dispatched vs. completed-recycled. When pending hits 0 *after* the last task
-    /// was seen, the prefetcher has finished all I/O for that block.
-    ///
-    /// Allocated only when VERBOSE is on (initialized lazily in run_task).
-    block_progress: DashMap<i64, Arc<BlockProgress>>,
 }
 
 /// Per-io_uring-worker tracking for a job.
@@ -221,30 +209,6 @@ struct JobSlot {
     job: Arc<Job>,
     /// pending + in-flight for this job within this io_uring worker
     remaining: usize,
-}
-
-/// Per-block I/O completion tracking. Used to emit `PREFETCHER_LEAVE (I/O complete)`
-/// exactly once, when the last sub-job of the last task is recycled.
-struct BlockProgress {
-    /// Tasks dispatched but not yet recycled. Incremented in run_task, decremented in
-    /// recycle_job_object.
-    pending: AtomicUsize,
-    /// Set to true when the receiver thread has dispatched the last task of this block.
-    /// Read in recycle to determine whether pending==0 means "all done" or just "drained
-    /// momentarily before more tasks arrive."
-    last_seen: AtomicBool,
-    /// Ensures the LEAVE marker is printed exactly once even if multiple recyclers race.
-    printed: AtomicBool,
-}
-
-impl BlockProgress {
-    fn new() -> Self {
-        Self {
-            pending: AtomicUsize::new(0),
-            last_seen: AtomicBool::new(false),
-            printed: AtomicBool::new(false),
-        }
-    }
 }
 
 impl Prefetcher {
@@ -321,46 +285,16 @@ impl Prefetcher {
     /// # Arguments
     /// * `task_id` - ID of the task to process
     pub fn run_task(&self, task_id: i64) {
-        //if (task_id >> 24) > 76 {
-        //    println!("HH run_task {:#016x}", task_id);
-        //}
         let height = split_task_id(task_id).0;
         if is_first_task_in_block(task_id) {
-            // ENTER first — mark the precise moment the prefetcher sees this block.
-            if VERBOSE { println!(
-                "PIPELINE_LOG: PREFETCHER_ENTER height={} timestamp={}",
-                height,
-                Utc::now().to_rfc3339()
-            ); }
             let cache = self.task_hub.get_entry_cache(height);
             let old = self.cache.swap(cache);
             drop(old);
-            if VERBOSE {
-                // Allocate a fresh BlockProgress so recycle_job_object can track
-                // when all sub-jobs across all tasks of this block have completed I/O.
-                self.job_man.block_progress.insert(height, Arc::new(BlockProgress::new()));
-            }
-        }
-
-        // Track per-task dispatch for the IO_DONE LEAVE marker.
-        // Safety: this runs on the receiver thread (serial), so increments are ordered
-        // strictly by task_idx. Decrements happen on recycle threads (concurrent), but
-        // the AtomicUsize provides the necessary synchronization.
-        if VERBOSE {
-            if let Some(bp) = self.job_man.block_progress.get(&height) {
-                bp.pending.fetch_add(1, Ordering::AcqRel);
-                if is_end_task_in_block(task_id) {
-                    bp.last_seen.store(true, Ordering::Release);
-                }
-            }
         }
         let change_sets = self.task_hub.get_change_sets(task_id).clone();
-        //println!("AA to_get_job task_id={:#016x}", task_id);
         let mut job = self.bck_receiver.recv().unwrap();
         job.need_send_to_updater = true;
         job.task_id = task_id;
-        // [Added] 标记是否为 Block 的最后一个任务
-        job.is_last_task_of_block = is_end_task_in_block(task_id);
         let arc: Ref<Arc<EntryCache>> = self.cache.get_ref();
         job.cache = Some(Arc::clone(&arc));
         let indexer = self.indexer.clone();
@@ -371,9 +305,6 @@ impl Prefetcher {
             for change_set in change_sets.iter() {
                 change_set.for_each_op(|op, _, kh: &[u8; 32], _k, _v, _, _r| {
                     let shard_id = byte0_to_shard_id(kh[0]);
-                    //if shard_id==0 && task_id==TASK_ID  {
-                    //    println!("HH kh={:?}", &kh[..4]);
-                    //}
 
                     let pos_list = if op == OP_CREATE || op == OP_DELETE {
                         indexer.for_each_adjacent_value(height, &kh[..])
@@ -415,9 +346,6 @@ impl Prefetcher {
         let change_sets = self.task_hub.get_change_sets(task_id).clone();
         let need_job = change_sets.iter().any(|x| x.has_create_del());
         if !need_job {
-            // for shard_id in 0..SHARD_COUNT {
-            //     self.job_man.done_chans[shard_id].send(task_id).unwrap();
-            // }
             return;
         }
 
@@ -465,11 +393,6 @@ pub struct TaskJob {
     /// Total number of sub-jobs
     sub_job_count: usize,
     need_send_to_updater: bool,
-
-    // [Added] 追踪 Block 状态
-    pub is_last_task_of_block: bool,
-    // [Added] 剩余未完成的分片数 (初始为 SHARD_COUNT)
-    pub shards_remaining: AtomicUsize,
 }
 
 /// A job for prefetching specific entries during warmup.
@@ -495,9 +418,6 @@ impl Default for TaskJob {
             sub_jobs: Vec::new(),
             sub_job_count: 0,
             need_send_to_updater: true,
-            // [Added] 初始化
-            is_last_task_of_block: false,
-            shards_remaining: AtomicUsize::new(SHARD_COUNT),
         }
     }
 }
@@ -620,9 +540,6 @@ impl TaskJob {
         self.sub_job_count = 0;
         self.sub_jobs.truncate(super::SUB_JOB_RESERVE_COUNT);
         self.sub_jobs.shrink_to_fit();
-        // [Added] 重置状态
-        self.is_last_task_of_block = false;
-        self.shards_remaining.store(SHARD_COUNT, Ordering::SeqCst);
     }
 }
 
@@ -693,7 +610,6 @@ impl JobManager {
             uring_count,
             uring_size,
             prune_receiver: None,
-            block_progress: DashMap::new(),
         }
     }
 
@@ -782,43 +698,6 @@ impl JobManager {
     /// * `job` - Job to recycle
     /// * `bz` - Buffer containing entry data
     fn recycle_job_object(&self, job: Arc<Job>) {
-        // For Task jobs: this fires when every sub-job for the task has completed I/O.
-        // Decrement the per-block pending counter. If we are the thread that brings
-        // pending to 0 *and* the receiver has already dispatched the block's last task
-        // (i.e., no more tasks will be added), this is the precise instant when the
-        // prefetcher has finished all work for this block.
-        //
-        // The check is gated on VERBOSE so the production path stays free of any
-        // DashMap lookup / atomic chatter when verbose logging is off.
-        if VERBOSE {
-            if let Job::Task(ref t, _) = *job {
-                let h = split_task_id(t.task_id).0;
-                let leave_now = if let Some(bp) = self.block_progress.get(&h) {
-                    // fetch_sub returns the value *before* the subtraction.
-                    let prev = bp.pending.fetch_sub(1, Ordering::AcqRel);
-                    // We are responsible for emitting LEAVE iff (a) we drove pending to 0
-                    // and (b) the receiver has already dispatched the last task.
-                    if prev == 1 && bp.last_seen.load(Ordering::Acquire) {
-                        // CAS-style print-once guard against the (extremely unlikely)
-                        // case where a recycle and a dispatch race; only one winner.
-                        !bp.printed.swap(true, Ordering::AcqRel)
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                };
-                if leave_now {
-                    println!(
-                        "PIPELINE_LOG: PREFETCHER_LEAVE height={} timestamp={} (I/O complete)",
-                        h,
-                        Utc::now().to_rfc3339()
-                    );
-                    self.block_progress.remove(&h);
-                }
-            }
-        }
-
         if let Some(job) = Arc::<Job>::into_inner(job) {
             match job {
                 Job::Task(mut j, mut disk) => {
@@ -879,9 +758,6 @@ impl JobManager {
         // [新增] 2. 启动一个 Dispatcher 线程 (广播员)
         // 它的唯一工作就是从总接收口拿消息，复制 N 份发给每个 Worker
         let master_prune_rx = self.prune_receiver.as_ref().expect("Prune receiver not set").clone(); // 假设你在 new() 里已经把 Receiver 放进 self 了
-        // 如果 Receiver 不支持 clone (crossbeam 的不支持多播)，你需要用 Arc 或者拿出它
-        // 这里假设按照我上个回答，你把 receiver 拿出来了
-        // let master_prune_rx = std::mem::replace(&mut self.prune_receiver, ...); 
         
         std::thread::spawn(move || {
             while let Ok(cmd) = master_prune_rx.recv() {
@@ -917,7 +793,6 @@ impl JobManager {
             let sj = job.get_sub_job(i);
             let need_read_ssd = self.add_sub_job(&job, sj);
             sj.need_read_ssd.store(need_read_ssd, SC);
-            //println!("AA SET id={:#016x} need={}", sj.sub_id, need_read_ssd);
         }
 
         // Pin the whole job onto a single io_uring worker to avoid cross-worker sharing.
@@ -930,15 +805,10 @@ impl JobManager {
                 let sj = job.get_sub_job(i);
                 (sj.need_read_ssd.load(SC), sj.sub_id)
             };
-            //println!("AA GET id={:#016x} need={}", sub_id, need_read_ssd);
             if need_read_ssd {
                 job.disk_sub_ids_mut().push(sub_id);
             }
         }
-
-        // Note: the old "(Soft/Submitted)" LEAVE marker has been removed.
-        // The new LEAVE marker now fires from recycle_job_object after all sub-jobs of
-        // every task in the block have completed I/O (true completion-time semantic).
 
         let job = Arc::new(job);
         if !job.disk_sub_ids().is_empty() {
@@ -1042,11 +912,9 @@ impl JobManager {
             .take(job_man.uring_size as usize)
             .collect();
         let mut ring = IoUring::<squeue::Entry, cqueue::Entry>::builder()
-            //.setup_sqpoll(5000)
             .setup_single_issuer()
             .build(job_man.uring_size)
             .unwrap();
-        //new(URING_SIZE).unwrap();
         // keep files being read in hashmap to prevent it from being dropped
 
         // Register fixed buffers, use ReadFixed to avoid per-I/O page pin overhead
@@ -1232,17 +1100,6 @@ impl JobManager {
                 //   to keep the submission queue saturated and maintain pipeline throughput.
                 let buf_free = buf_list.has_free_buf();
 
-                // let wait_nr = if pending.is_empty() || !buf_free {
-                //     // No more work can be submitted right now (either no pending work, or buffers exhausted).
-                //     // Batch-wait to amortize syscall overhead.
-                //     (in_flight / 2).clamp(MIN_WAIT, MAX_WAIT)
-                // } 
-                // else if pushed_any {
-                //     // We just pushed SQEs and can continue submitting; keep latency low to sustain pipeline.
-                //     MIN_WAIT
-                // } else {
-                //     MIN_WAIT
-                // };
                 let wait_nr = if !pending.is_empty() && !buf_free {
                     1 
                 } else if pending.is_empty() {
@@ -1271,7 +1128,6 @@ impl JobManager {
                 if n <= 0 {
                     panic!("AA uring read error");
                 }
-                //println!("AA done sub_id {:#016x}", sub_id);
                 // Finish using a shared reference; no Arc clone needed per completion.
                 {
                     let slot = job_slots[job_slot].as_ref().expect("job slot must exist");
@@ -1354,8 +1210,6 @@ impl JobManager {
         }
         job.get_entry_cache()
             .insert(sj.shard_id as usize, sj.file_pos, &e);
-        // the last finished sub_job send task_id to done_chan
-        // self.handle_sub_job_completed(&job, sj.shard_id as usize);
     }
 }
 
@@ -1389,7 +1243,6 @@ impl SubJob {
     /// # Returns
     /// A new SubJob instance
     fn new(sub_id: u32, shard_id: usize, file_pos: i64) -> Self {
-        //buf.fill(0);
         SubJob {
             sub_id,
             shard_id: shard_id as u8,
@@ -1409,7 +1262,6 @@ impl SubJob {
         self.shard_id = shard_id as u8;
         self.file_pos = file_pos;
         self.need_read_ssd.store(false, SC);
-        //self.buf.fill(0);
     }
 
     /// Calculates the io_uring instance ID for a given position.
@@ -1535,112 +1387,4 @@ impl BufList {
             .collect()
     }
 }
-
-/*
-#[test]
-fn test_run_task() {
-    let temp_dir = tempfile::Builder::new()
-        .prefix("prefetcher_ut_cache_hit")
-        .tempdir()
-        .unwrap();
-    #[cfg(not(feature = "tee_cipher"))]
-    let cipher = None;
-    #[cfg(feature = "tee_cipher")]
-    let cipher = {
-        let key = Key::<Aes256Gcm>::from_slice(&[0; 32]);
-        let cipher = Aes256Gcm::new(&key);
-        Some(cipher)
-    };
-
-    let entry_file = Arc::new(EntryFile::new(
-        8 * 1024,
-        128 * 1024,
-        temp_dir.path().to_str().unwrap().to_string(),
-        cipher,
-    ));
-    let (mut entry_buffer_writer, _reader) = entrybuffer::new(0, 1024);
-    let entry_cache = Arc::new(EntryCache::new());
-    let indexer_arc = Arc::new(Indexer::new(1024));
-    let task_hub = Arc::new(BlockPairTaskHub::<SimpleTask>::new());
-    let pool = ThreadPool::new(1);
-
-    let mut cs1 = ChangeSet::new();
-    let key = "key".as_bytes();
-    let kh = qmdb_common::entryfile::entry::entry_key_hash(key);
-    let shard_id = byte0_to_shard_id(kh[0]) as u8;
-    cs1.add_op(
-        def::OP_DELETE,
-        shard_id,
-        &kh,
-        key.as_ref(),
-        &[1, 2, 3],
-        Option::None,
-    );
-    cs1.sort();
-    let task0 = SimpleTask::new(vec![ChangeSet::new()]);
-    let task1 = SimpleTask::new(vec![cs1]);
-    let tasks = vec![
-        RwLock::new(Option::Some(task0)),
-        RwLock::new(Option::Some(task1)),
-    ];
-
-    let entry = Entry {
-        key: key,
-        value: "val".as_bytes(),
-        next_key_hash: &[0xab; 32],
-        version: 12345,
-        serial_number: 99999,
-    };
-    let pos = entry_buffer_writer.append(&entry, &[]);
-    indexer_arc.add_kv(&kh[..10], pos, 0);
-
-    for _i in 0..2000 {
-        let _ = entry_buffer_writer.append(&entry, &[]);
-    }
-
-    task_hub.start_block(
-        0x123,
-        Arc::new(TasksManager::new(tasks, 0)),
-        entry_cache.clone(),
-    );
-
-    let mut job_man = JobManager::new(0, 0, 0);
-    let mut done_receivers = Vec::with_capacity(SHARD_COUNT);
-    for _ in 0..SHARD_COUNT {
-        let (done_sender, done_receiver) = bounded(1);
-        job_man.add_shard(
-            entry_buffer_writer.entry_buffer.clone(),
-            entry_file.clone(),
-            done_sender,
-        );
-        done_receivers.push(done_receiver);
-    }
-
-    let prefetcher = Prefetcher::new(
-        task_hub,
-        entry_cache.clone(),
-        indexer_arc,
-        Arc::new(pool),
-        job_man,
-    );
-
-    prefetcher.run_task(0, 0x123000001);
-
-    std::thread::sleep(std::time::Duration::from_secs(1));
-    assert!(done_receivers[0].try_recv().is_ok());
-    assert!(done_receivers[0].try_recv().is_err());
-    assert!(done_receivers[shard_id as usize].try_recv().is_ok());
-    assert!(done_receivers[shard_id as usize].try_recv().is_err());
-
-    let mut filled_size = 0;
-    entry_cache.lookup(shard_id as usize, 0, |entry_bz| {
-        filled_size = entry_bz.bz.len();
-        assert_eq!(entry_bz.value(), "val".as_bytes());
-    });
-
-    #[cfg(not(feature = "tee_cipher"))]
-    assert_eq!(64, filled_size);
-    #[cfg(feature = "tee_cipher")]
-    assert_eq!(80, filled_size);
-}*/
 

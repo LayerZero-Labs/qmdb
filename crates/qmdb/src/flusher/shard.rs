@@ -11,9 +11,6 @@ use std::sync::Arc;
 use crate::prefetcher::dioprefetcher::PruneCmd;
 
 use super::barrier_set::BarrierSet;
-use crate::VERBOSE;
-use std::time::{Duration, Instant};
-use chrono::Utc;
 
 /// Type alias for the metadata database implementation.
 /// Uses RocksDB for efficient key-value storage with atomic batch operations.
@@ -57,10 +54,6 @@ pub struct FlusherShard {
     pub proof_req_sender: crossbeam::channel::Sender<ProofReqElem>,
     /// Channel for receiving proof requests
     proof_req_receiver: crossbeam::channel::Receiver<ProofReqElem>,
-    // [Added] Pipeline Log & Timing fields
-    active_duration: Duration,
-    work_start_timer: Option<Instant>,
-    block_start_time: Option<Instant>,
 }
 
 impl FlusherShard {
@@ -93,27 +86,6 @@ impl FlusherShard {
             shard_id,
             proof_req_sender: pr_sender,
             proof_req_receiver: pr_receiver,
-            // [Added] Initialize timing fields
-            active_duration: Duration::new(0, 0),
-            work_start_timer: None,
-            block_start_time: None,
-        }
-    }
-
-    // [Added] Helper to resume timing
-    fn resume_watch(&mut self) {
-        if VERBOSE && self.work_start_timer.is_none() {
-            self.work_start_timer = Some(Instant::now());
-        }
-    }
-
-    // [Added] Helper to pause timing
-    fn pause_watch(&mut self) {
-        if VERBOSE {
-            if let Some(start) = self.work_start_timer {
-                self.active_duration += start.elapsed();
-                self.work_start_timer = None;
-            }
         }
     }
 
@@ -217,36 +189,12 @@ impl FlusherShard {
         prune_sender: crossbeam::channel::Sender<PruneCmd>,
     ) {
         let mut buf_read = self.buf_read.take().unwrap();
-        if VERBOSE {
-            self.block_start_time = Some(Instant::now());
-            self.active_duration = Duration::new(0, 0);
-            self.work_start_timer = None;
-            println!(
-                "PIPELINE_LOG: FLUSHER_SHARD_START height={} shard={} timestamp={}",
-                curr_height,
-                self.shard_id,
-                Utc::now().to_rfc3339()
-            );
-        }
-
-        // --- [1. 阶段：读取与构建] ---
-        let mut append_cpu_time = Duration::ZERO;
-        let read_start_time = if VERBOSE { Some(Instant::now()) } else { None };
-
         loop {
             let mut file_pos: i64 = 0;
             let (is_end_of_block, expected_file_pos) = buf_read.read_next_entry(|entry_bz| {
-                let append_start = if VERBOSE { Some(Instant::now()) } else { None };
-                self.resume_watch(); // no-op when !VERBOSE
-
                 file_pos = self.tree.append_entry(&entry_bz).unwrap();
                 for (_, dsn) in entry_bz.dsn_iter() {
                     self.tree.deactive_entry(dsn);
-                }
-
-                self.pause_watch(); // no-op when !VERBOSE
-                if VERBOSE {
-                    if let Some(s) = append_start { append_cpu_time += s.elapsed(); }
                 }
             });
             if !is_end_of_block && file_pos != expected_file_pos {
@@ -258,10 +206,6 @@ impl FlusherShard {
         }
 
         let (compact_done_pos, compact_done_sn, sn_end) = buf_read.read_extra_info();
-
-        // --- [2. 阶段：文件刷盘与 Prune] ---
-        let flush_files_start = if VERBOSE { Some(Instant::now()) } else { None };
-        self.resume_watch(); // no-op when !VERBOSE
 
         let mut start_twig_id: u64 = 0;
         let mut end_twig_id: u64 = 0;
@@ -314,15 +258,7 @@ impl FlusherShard {
         let (entry_file_size, twig_file_size) = self.tree.get_file_sizes();
         let last_compact_done_sn = self.last_compact_done_sn;
         self.last_compact_done_sn = compact_done_sn;
-
-        // --- [3. 阶段：屏障同步] ---
-        self.pause_watch(); // no-op when !VERBOSE
-        let barrier_start = if VERBOSE { Some(Instant::now()) } else { None };
         bar_set.flush_bar.wait();
-
-        // --- [4. 阶段：上层树与元数据处理] ---
-        self.resume_watch(); // no-op when !VERBOSE
-        let meta_process_start = if VERBOSE { Some(Instant::now()) } else { None };
 
         let youngest_twig_id = self.tree.youngest_twig_id;
         let shard_id = self.shard_id;
@@ -342,13 +278,11 @@ impl FlusherShard {
         }
 
         self.handle_proof_req();
-        self.pause_watch(); // no-op when !VERBOSE
 
         //shard#0 must wait other shards to finish
         if shard_id == 0 {
             bar_set.metadb_bar.wait();
         }
-        self.resume_watch(); // no-op when !VERBOSE
 
         let mut meta = meta.write_arc();
         if !edge_nodes_bytes.is_empty() {
@@ -372,49 +306,8 @@ impl FlusherShard {
 
         if shard_id == 0 {
             meta.set_curr_height(curr_height);
-            let commit_start = if VERBOSE { Some(Instant::now()) } else { None };
-            if VERBOSE {
-                println!(
-                    "PIPELINE_LOG: FLUSHER_GLOBAL_COMMIT_START height={} timestamp={}",
-                    curr_height,
-                    Utc::now().to_rfc3339()
-                );
-            }
             let meta_info = meta.commit();
-            if VERBOSE {
-                println!(
-                    "PIPELINE_LOG: FLUSHER_GLOBAL_COMMIT_END height={} timestamp={}",
-                    curr_height,
-                    Utc::now().to_rfc3339()
-                );
-            }
             drop(meta);
-            self.pause_watch(); // no-op when !VERBOSE
-
-            if VERBOSE {
-                let flush_files_time = flush_files_start.and_then(|s| Some(s.elapsed())).unwrap_or_default();
-                let barrier_time = barrier_start.and_then(|s| Some(s.elapsed())).unwrap_or_default();
-                let meta_process_time = meta_process_start.and_then(|s| Some(s.elapsed())).unwrap_or_default();
-                let commit_time = commit_start.and_then(|s| Some(s.elapsed())).unwrap_or_default();
-                let upstream_wait_time = read_start_time
-                    .map(|s| s.elapsed().saturating_sub(append_cpu_time))
-                    .unwrap_or_default();
-                if let Some(block_start) = self.block_start_time {
-                    let total_block_time = block_start.elapsed();
-                    let active_ratio = if total_block_time.as_secs_f64() > 0.0 {
-                        self.active_duration.as_secs_f64() / total_block_time.as_secs_f64()
-                    } else { 0.0 };
-                    println!(
-                        "FLUSHER_PROFILE: height={} shard={} total={}ms upstream_wait={}ms append={}ms flush={}ms barrier={}ms meta={}ms commit={}ms active_ratio={:.3}",
-                        curr_height, self.shard_id,
-                        total_block_time.as_millis(), upstream_wait_time.as_millis(),
-                        append_cpu_time.as_millis(), flush_files_time.as_millis(),
-                        barrier_time.as_millis(), meta_process_time.as_millis(),
-                        commit_time.as_millis(), active_ratio
-                    );
-                }
-            }
-
             match end_block_chan.send(meta_info) {
                 Ok(_) => {}
                 Err(_) => {
@@ -423,24 +316,7 @@ impl FlusherShard {
             }
         } else {
             drop(meta);
-            self.pause_watch(); // no-op when !VERBOSE
             bar_set.metadb_bar.wait();
-        }
-
-        if VERBOSE {
-            let active_ratio_end = if let Some(start) = self.block_start_time {
-                let total = start.elapsed().as_secs_f64();
-                let active = self.active_duration.as_secs_f64();
-                if total > 0.0 { active / total } else { 0.0 }
-            } else { 0.0 };
-            println!(
-                "PIPELINE_LOG: FLUSHER_SHARD_END height={} shard={} timestamp={} active_ratio={:.4}",
-                curr_height,
-                self.shard_id,
-                Utc::now().to_rfc3339(),
-                active_ratio_end
-            );
-            self.block_start_time = None;
         }
         self.buf_read = Some(buf_read);
     }

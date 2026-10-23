@@ -154,9 +154,6 @@ use qmdb_common::{
 };
 use smallvec::SmallVec;
 use std::sync::Arc;
-use crate::VERBOSE;
-use std::time::{Duration, Instant};
-use chrono::Utc;
 
 /// A type alias for the mutex guard used to protect the entry buffer writer.
 ///
@@ -231,21 +228,6 @@ pub struct Updater {
     miss_count: u64,
     /// Task IDs that mark the end of a block
     end_block_task_ids: SmallVec<[i64; 4]>, // TODO: need optimize this
-
-    // [Added] Pipeline Log & Timing fields
-    active_duration: Duration,
-    work_start_timer: Option<Instant>,
-    block_start_time: Option<Instant>,
-    // [Added] 性能统计字段
-    stat_disk_io_micros: u128,   // 纯磁盘读取耗时
-    stat_cache_micros: u128,     // Cache 查找耗时
-    stat_indexer_micros: u128,   // Indexer 查询耗时
-    stat_wal_micros: u128,       // 写 Buffer/WAL 耗时
-    stat_total_ops: u64,         // 操作总数
-
-    stat_mutator_micros: u128,   // 包含 indexer 查询和 ebw.append 的耗时
-    stat_compact_micros: u128,   // 纯 compact 逻辑耗时 (包含里面的 cache.insert)
-    stat_compact_loops: u64,     // compact 内部消费队列的循环次数
 }
 
 impl Updater {
@@ -313,36 +295,6 @@ impl Updater {
             hit_count: 0,
             miss_count: 0,
             end_block_task_ids: SmallVec::new(),
-            // [Added] Initialize timing fields
-            active_duration: Duration::new(0, 0),
-            work_start_timer: None,
-            block_start_time: None,
-            // 性能统计参数初始化
-            stat_disk_io_micros: 0,
-            stat_cache_micros: 0,
-            stat_indexer_micros: 0,
-            stat_wal_micros: 0,
-            stat_total_ops: 0,
-            stat_mutator_micros: 0,
-            stat_compact_micros: 0,
-            stat_compact_loops: 0,
-        }
-    }
-
-    // [Added] Helper to resume timing (no-op when !VERBOSE)
-    fn resume_watch(&mut self) {
-        if VERBOSE && self.work_start_timer.is_none() {
-            self.work_start_timer = Some(Instant::now());
-        }
-    }
-
-    // [Added] Helper to pause timing (no-op when !VERBOSE)
-    fn pause_watch(&mut self) {
-        if VERBOSE {
-            if let Some(start) = self.work_start_timer {
-                self.active_duration += start.elapsed();
-                self.work_start_timer = None;
-            }
         }
     }
 
@@ -370,13 +322,10 @@ impl Updater {
     /// - Maintains consistency
     /// - Reports access errors
     fn read_entry(&mut self, ebw: &mut Guard, shard_id: usize, file_pos: i64, buf: &mut ReadBuf) {
-        let start = if VERBOSE { Some(Instant::now()) } else { None };
-
         buf.clear();
         self.cache.lookup(shard_id, file_pos, buf);
         if !buf.is_empty() {
             self.hit_count += 1;
-            if VERBOSE { self.stat_cache_micros += start.unwrap().elapsed().as_micros(); }
             return;
         }
 
@@ -385,16 +334,10 @@ impl Updater {
         if !buf.is_empty() {
             self.hit_count += 1;
             self.cache.insert(shard_id, file_pos, &buf.as_entry_bz());
-            if VERBOSE { self.stat_cache_micros += start.unwrap().elapsed().as_micros(); }
             return;
         }
-
-        if VERBOSE { self.stat_cache_micros += start.unwrap().elapsed().as_micros(); }
-
         self.miss_count += 1;
-
         let ef = &self.entry_file;
-        let io_start = if VERBOSE { Some(Instant::now()) } else { None };
 
         #[cfg(all(target_os = "linux", not(feature = "disable_dio")))]
         if !ef.read_entry_with_uring(file_pos, buf) {
@@ -402,7 +345,6 @@ impl Updater {
         }
         #[cfg(any(not(target_os = "linux"), feature = "disable_dio"))]
         ef.read_entry(file_pos, buf);
-        if VERBOSE { self.stat_disk_io_micros += io_start.unwrap().elapsed().as_micros(); }
 
         assert!(!buf.is_empty(), "file_pos={file_pos} is empty");
         self.cache.insert(shard_id, file_pos, &buf.as_entry_bz());
@@ -424,7 +366,6 @@ impl Updater {
         F: Fn(&EntryBz) -> bool,
     {
         let pos_list = self.indexer.for_each_value(height, &key_hash[..]);
-        //println!("lookup_entry kh={} pos_list={:?}", hex::encode(key_hash), pos_list);
         lookup_entry_in_pos_list(
             pos_list.enumerate(),
             |pos, buf| self.read_entry(ebw, self.shard_id, pos, buf),
@@ -595,38 +536,9 @@ impl Updater {
 
             let cache = self.task_hub.get_entry_cache(height);
             self.cache = cache;
-
-            // [Added] Block Start Logic (only when VERBOSE)
-            if VERBOSE {
-                self.block_start_time = Some(Instant::now());
-                self.active_duration = Duration::new(0, 0);
-
-                println!(
-                    "PIPELINE_LOG: UPDATER_START height={} shard={} timestamp={}",
-                    height,
-                    self.shard_id,
-                    Utc::now().to_rfc3339()
-                );
-
-                self.stat_disk_io_micros = 0;
-                self.stat_cache_micros = 0;
-                self.stat_indexer_micros = 0;
-                self.stat_wal_micros = 0;
-                self.stat_total_ops = 0;
-                self.hit_count = 0;
-                self.miss_count = 0;
-                self.stat_mutator_micros = 0;
-                self.stat_compact_micros = 0;
-                self.stat_compact_loops = 0;
-                self.work_start_timer = Some(Instant::now());
-            }
-        } else {
-            self.resume_watch();
         }
-
         for change_set in self.task_hub.get_change_sets(task_id).iter() {
             change_set.run_in_shard(self.shard_id, |op, key_hash, k, v, r| {
-                if VERBOSE { self.stat_total_ops += 1; }
                 self.compare_active_info(r);
                 match op {
                     OP_WRITE => self.write_kv(ebw, key_hash, k, v, r),
@@ -642,37 +554,6 @@ impl Updater {
         }
         if end_block {
             ebw.end_block(self.compact_done_pos, self.sn_start, self.sn_end);
-            self.pause_watch(); // no-op when !VERBOSE
-
-            if VERBOSE {
-                let height = split_task_id(task_id).0;
-                let total_wall_time = self.block_start_time.unwrap().elapsed();
-                let total_time_ms = total_wall_time.as_millis();
-                let active_time_ms = self.active_duration.as_millis();
-                let io_time_ms = self.stat_disk_io_micros / 1000;
-                let cache_time_ms = self.stat_cache_micros / 1000;
-                let active_ratio = if total_time_ms > 0 {
-                    self.active_duration.as_secs_f64() / total_wall_time.as_secs_f64()
-                } else { 0.0 };
-                println!(
-                    "UPDATER_STATS height={} shard={} ops={} hits={} misses={} io={}ms cache={}ms mutator={}ms compact={}ms(loops={}) active_ratio={:.3}",
-                    height, self.shard_id, self.stat_total_ops,
-                    self.hit_count, self.miss_count,
-                    io_time_ms, cache_time_ms,
-                    self.stat_mutator_micros / 1000, self.stat_compact_micros / 1000,
-                    self.stat_compact_loops, active_ratio
-                );
-                println!(
-                    "PIPELINE_LOG: UPDATER_END height={} shard={} timestamp={} active_ratio={:.4}",
-                    height,
-                    self.shard_id,
-                    Utc::now().to_rfc3339(),
-                    active_ratio
-                );
-                self.block_start_time = None;
-            }
-        } else {
-            self.pause_watch(); // no-op when !VERBOSE
         }
     }
 
@@ -724,8 +605,7 @@ impl Updater {
         let mut mutator = EntryMutatorBuilder::new(&mut storage)
             .with_indexer(Arc::as_ref(&indexer))
             .build();
-        
-        let mutator_start = if VERBOSE { Some(Instant::now()) } else { None };
+
         let _result = mutator.update_kv(
             &mut buf,
             key_hash,
@@ -736,7 +616,6 @@ impl Updater {
             sn_end,
             r,
         );
-        if VERBOSE { self.stat_mutator_micros += mutator_start.unwrap().elapsed().as_micros(); }
 
         self.read_entry_buf = Some(buf);
     }
@@ -788,9 +667,7 @@ impl Updater {
             .with_indexer(Arc::as_ref(&indexer))
             .build();
 
-        let mutator_start = if VERBOSE { Some(Instant::now()) } else { None };
         let _result = mutator.delete_kv(&mut buf, key_hash, key, shard_id, curr_version, sn_end, r);
-        if VERBOSE { self.stat_mutator_micros += mutator_start.unwrap().elapsed().as_micros(); }
 
         self.read_entry_buf = Some(buf);
     }
@@ -844,7 +721,6 @@ impl Updater {
             .with_indexer(Arc::as_ref(&indexer))
             .build();
 
-        let mutator_start = if VERBOSE { Some(Instant::now()) } else { None };
         let _result = mutator.create_kv(
             &mut buf,
             key_hash,
@@ -855,7 +731,6 @@ impl Updater {
             sn_end,
             r,
         );
-        if VERBOSE { self.stat_mutator_micros += mutator_start.unwrap().elapsed().as_micros(); }
 
         self.read_entry_buf = Some(buf);
     }
@@ -920,15 +795,9 @@ impl Updater {
         ) -> bool {
             indexer.key_exists(key_hash, file_pos, serial_number)
         }
-        
-        let compact_start = if VERBOSE { Some(Instant::now()) } else { None };
-        let mut loop_count: u64 = 0;
 
         let (job, kh) = loop {
-            if VERBOSE { loop_count += 1; }
-            self.pause_watch(); // no-op when !VERBOSE
             let job = self.compact_consumer.consume();
-            self.resume_watch(); // no-op when !VERBOSE
             let e = EntryBz { bz: &job.entry_bz };
             let kh = e.key_hash();
 
@@ -937,7 +806,6 @@ impl Updater {
             }
             self.compact_consumer.send_returned(job);
         };
-        if VERBOSE { self.stat_compact_loops += loop_count; }
 
         let entry_bz = EntryBz { bz: &job.entry_bz };
 
@@ -965,7 +833,6 @@ impl Updater {
         // scenemaker needs compacted entry
         self.cache.insert(self.shard_id, job.old_pos, &entry_bz);
         self.compact_consumer.send_returned(job);
-        if VERBOSE { self.stat_compact_micros += compact_start.unwrap().elapsed().as_micros(); }
     }
 
     /// Checks if compaction should be triggered.
@@ -1048,13 +915,6 @@ fn _compare_old_entry(rec: Option<&Box<OpRecord>>, entry_bz: &EntryBz) {
 fn _compare_prev_entry(rec: Option<&Box<OpRecord>>, entry_bz: &EntryBz) {
     if let Some(rec) = rec {
         let v = rec.rd_list.first().unwrap();
-        //if &v[..] != entry_bz.bz {
-        //    let e = EntryBz { bz: &v[..] };
-        //    println!("ref k={} v={}", hex::encode(e.key()), hex::encode(e.value()));
-        //    println!("ref sn={:#016x} ver={:#016x}", e.serial_number(), e.version());
-        //    println!("imp k={} v={}", hex::encode(entry_bz.key()), hex::encode(entry_bz.value()));
-        //    println!("imp sn={:#016x} ver={:#016x}", entry_bz.serial_number(), entry_bz.version());
-        //}
         assert_eq!(&v[..], entry_bz.bz, "compare_prev_entry failed");
     }
 }
@@ -1146,34 +1006,6 @@ fn _compare_put_entry(
             entry_equal(&v[..], entry, dsn_list),
             "compare_put_entry failed"
         );
-    }
-}
-
-/// Public wrapper for _compare_old_entry.
-fn compare_old_entry(rec: Option<&Box<OpRecord>>, entry_bz: &EntryBz) {
-    if cfg!(feature = "check_rec") {
-        _compare_old_entry(rec, entry_bz)
-    }
-}
-
-/// Public wrapper for _compare_prev_entry.
-fn compare_prev_entry(rec: Option<&Box<OpRecord>>, entry_bz: &EntryBz) {
-    if cfg!(feature = "check_rec") {
-        _compare_prev_entry(rec, entry_bz)
-    }
-}
-
-/// Public wrapper for _compare_prev_changed.
-fn compare_prev_changed(rec: Option<&Box<OpRecord>>, entry: &Entry, dsn_list: &[u64]) {
-    if cfg!(feature = "check_rec") {
-        _compare_prev_changed(rec, entry, dsn_list);
-    }
-}
-
-/// Public wrapper for _compare_new_entry.
-fn compare_new_entry(rec: Option<&Box<OpRecord>>, entry: &Entry, dsn_list: &[u64]) {
-    if cfg!(feature = "check_rec") {
-        _compare_new_entry(rec, entry, dsn_list);
     }
 }
 

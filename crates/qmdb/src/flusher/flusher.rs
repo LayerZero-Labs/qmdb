@@ -288,7 +288,6 @@ impl Flusher {
             let prune_to_height = self.curr_height - self.max_kept_height;
             let bar_set = Arc::new(BarrierSet::new(shard_count));
             thread::scope(|s| {
-                // let curr_height = self.curr_height;
                 for shard in self.shards.iter_mut() {
                     let bar_set = bar_set.clone();
                     let curr_height = self.curr_height;

@@ -140,9 +140,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::thread;
 use threadpool::ThreadPool;
-use chrono::Utc;
 use crate::prefetcher::dioprefetcher::PruneCmd;
-use std::time::Duration;
 
 use crate::compactor::{CompactJob, Compactor};
 use crate::entryfile::{EntryCache, EntryFile, ExtEntryFile};
@@ -155,7 +153,7 @@ use crate::metadb::{MetaDB, MetaInfo};
 use crate::tasks::{BlockPairTaskHub, TaskHub, TasksManager};
 use crate::updater::Updater;
 use crate::utils::ringchannel;
-use log::{debug, info};
+use log::info;
 use qmdb_common::def::{
     calc_max_level, COMPACT_RING_SIZE, DEFAULT_ENTRY_SIZE, SENTRY_COUNT, SHARD_COUNT, TWIG_SHIFT,
 };
@@ -359,7 +357,7 @@ impl AdsCore {
             )));
         }
 
-        let max_kept_height = 10; //1000;
+        let max_kept_height = 10;
         let flusher = Flusher::new(
             shards,
             meta.clone(),
@@ -593,7 +591,6 @@ impl AdsCore {
         shard_id: usize,
         cipher: Option<Aes256Gcm>,
     ) -> (Tree, i64, u64) {
-        // let meta = meta.read_arc();
         let oldest_active_sn = meta.get_oldest_active_sn(shard_id);
         let youngest_twig_id = meta.get_youngest_twig_id(shard_id);
         let edge_nodes = bytes_to_edge_nodes(&meta.get_edge_nodes(shard_id));
@@ -1081,29 +1078,6 @@ impl<T: Task + 'static> AdsWrap<T> {
         // The minimum entry length is 60 bytes.
         assert!(compact_thres * 60 >= END_MARGIN);
         let task_hub = Arc::new(BlockPairTaskHub::<T>::new());
-
-        // ==========================================
-        // SLOT_ANALYSIS monitor: only spawn when VERBOSE
-        // ==========================================
-        if VERBOSE {
-            let monitor_hub = task_hub.clone();
-            thread::spawn(move || {
-                loop {
-                    let free_slots = monitor_hub.free_slot_count();
-                    let (s0, s1) = monitor_hub.get_slot_status();
-                    println!(
-                        "PIPELINE_LOG: SLOT_ANALYSIS Free={} S0={:?} S1={:?} timestamp={}",
-                        free_slots,
-                        s0,
-                        s1,
-                        Utc::now().to_rfc3339()
-                    );
-                    thread::sleep(Duration::from_millis(5));
-                }
-            });
-        }
-        // ==========================================
-
         let (mut ads, end_block_chan, flusher) = AdsCore::_new(
             task_hub.clone(),
             dir,
@@ -1262,23 +1236,7 @@ impl<T: Task + 'static> AdsWrap<T> {
         let mut meta_info = Option::None;
         if self.task_hub.free_slot_count() == 0 {
             // adscore and task_hub are busy, wait for them to finish an old block
-            // --------- add timestamp ---------
-            if VERBOSE { println!(
-                "PIPELINE_LOG: CLIENT_WAIT_START height={} timestamp={}",
-                height,
-                Utc::now().to_rfc3339()
-            ); }
-            // ---------------------------------  
             let _meta_info = self.end_block_chan.recv().unwrap();
-            // --------- add timestamp ---------
-            if VERBOSE { println!(
-                "PIPELINE_LOG: CLIENT_WAIT_END height={} received_height={} timestamp={}",
-                height,
-                _meta_info.curr_height,
-                Utc::now().to_rfc3339()
-            ); }
-            // ---------------------------------  
-
             self.task_hub.end_block(_meta_info.curr_height);
             meta_info = Some(_meta_info);
         }

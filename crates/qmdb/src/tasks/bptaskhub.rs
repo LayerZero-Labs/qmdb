@@ -46,16 +46,6 @@ impl<T: Task> BlockPairTaskHub<T> {
         count
     }
 
-    pub fn get_slot_status(&self) -> (Option<i64>, Option<i64>) {
-        let h0 = self.height0.load(Ordering::Acquire);
-        let h1 = self.height1.load(Ordering::Acquire);
-
-        let slot0 = if h0 < 0 { None } else { Some(h0) };
-        let slot1 = if h1 < 0 { None } else { Some(h1) };
-
-        (slot0, slot1)
-    }
-
     pub fn end_block(&self, height: i64) {
         let height0 = self.height0.load(Ordering::Acquire);
         if height0 == height {
