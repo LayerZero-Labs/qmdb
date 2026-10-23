@@ -40,7 +40,7 @@ cfg_if! {
             #[derive(Debug, Clone, Copy)]
             pub struct PruneCmd {
                 pub shard_id: usize,
-                pub seg_id: usize,
+                pub end_seg_id: usize,
             }
 
             /// No io_uring reads without the DIO prefetcher.

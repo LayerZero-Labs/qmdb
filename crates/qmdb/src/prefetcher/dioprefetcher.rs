@@ -50,10 +50,25 @@ pub fn dio_read_count() -> u64 {
     DIO_READ_COUNT.load(Ordering::Relaxed)
 }
 
+/// Sent by the flusher just before it prunes: every entry-file segment of `shard_id`
+/// with an id below `end_seg_id` is being deleted. Each command covers all earlier ones.
 #[derive(Debug, Clone, Copy)]
 pub struct PruneCmd {
     pub shard_id: usize,
-    pub seg_id: usize,
+    pub end_seg_id: usize,
+}
+
+/// Registration key of a (shard, segment) pair.
+fn seg_key(shard_id: usize, seg_id: u64) -> u64 {
+    ((shard_id as u64) << 56) | (seg_id & ((1u64 << 56) - 1))
+}
+
+fn key_shard(key: u64) -> usize {
+    (key >> 56) as usize
+}
+
+fn key_seg(key: u64) -> u64 {
+    key & ((1u64 << 56) - 1)
 }
 
 struct RegisteredFiles {
@@ -61,8 +76,10 @@ struct RegisteredFiles {
     next_slot: u16,
     pending: Vec<(u64, RawFd)>,
     pending_keys: HashSet<u64>,
-    // [新增] 真正实现槽位复用，修复性能退化
-    free_slots: Vec<u16>, 
+    /// Slots released by pruned segments, reused before new ones.
+    free_slots: Vec<u16>,
+    /// Per shard: segments below this id have been pruned and are never registered again.
+    pruned_below: [u64; SHARD_COUNT],
 }
 
 impl RegisteredFiles {
@@ -72,8 +89,8 @@ impl RegisteredFiles {
             next_slot: 0,
             pending: Vec::new(),
             pending_keys: HashSet::with_capacity(256),
-            // [新增] 初始化资源池
-            free_slots: Vec::with_capacity(256), 
+            free_slots: Vec::with_capacity(256),
+            pruned_below: [0; SHARD_COUNT],
         }
     }
 
@@ -81,7 +98,9 @@ impl RegisteredFiles {
         if let Some(&slot) = self.key_to_slot.get(&key) {
             return Some(slot);
         }
-        // [修改] 检查池子里有没有，或者还能不能开辟新槽
+        if key_seg(key) < self.pruned_below[key_shard(key)] {
+            return None;
+        }
         if self.free_slots.is_empty() && self.next_slot as u32 >= MAX_REGISTERED_FILES {
             return None;
         }
@@ -91,19 +110,31 @@ impl RegisteredFiles {
         None
     }
 
-    /// [重写] 极速异步驱逐 (0 Syscall overhead!)
-    pub fn evict_sync<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
+    /// Unregisters every segment of `shard_id` below `end_seg_id`. Clearing a slot drops
+    /// this ring's reference to the deleted segment file, so its disk space is released
+    /// once in-flight reads of it complete, instead of when the process exits. The slot
+    /// is then reused.
+    fn prune<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
         &mut self,
-        _ring: &IoUring<S, C>, // 甚至不需要真的去调用 ring 了
-        key: u64,
+        ring: &IoUring<S, C>,
+        shard_id: usize,
+        end_seg_id: u64,
     ) {
-        if let Some(slot) = self.key_to_slot.remove(&key) {
-            self.pending_keys.remove(&key);
-            
-            // 魔法在这里：不再调用 register_files_update(&[-1])
-            // 只是把 slot 回收。等下次写入新 FD 时，内核会自动覆盖并回收旧文件！
-            self.free_slots.push(slot); 
+        let start = self.pruned_below[shard_id];
+        if end_seg_id <= start {
+            return;
         }
+        for seg_id in start..end_seg_id {
+            if let Some(slot) = self.key_to_slot.remove(&seg_key(shard_id, seg_id)) {
+                // On failure the slot still holds the file until it is reused.
+                let _ = ring.submitter().register_files_update(slot as u32, &[-1]);
+                self.free_slots.push(slot);
+            }
+        }
+        let is_pruned = |key: u64| key_shard(key) == shard_id && key_seg(key) < end_seg_id;
+        self.pending.retain(|&(key, _)| !is_pruned(key));
+        self.pending_keys.retain(|&key| !is_pruned(key));
+        self.pruned_below[shard_id] = end_seg_id;
     }
 
     fn flush_pending<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
@@ -112,8 +143,6 @@ impl RegisteredFiles {
     ) {
         let mut leftovers: Vec<(u64, RawFd)> = Vec::new();
         for (key, fd) in self.pending.drain(..) {
-            
-            // [新增] 优先复用被驱逐的旧槽位！
             let slot = if let Some(s) = self.free_slots.pop() {
                 s
             } else if (self.next_slot as u32) < MAX_REGISTERED_FILES {
@@ -125,9 +154,6 @@ impl RegisteredFiles {
                 continue;
             };
 
-            // 这里的 update 会一石二鸟：
-            // 1. 如果是新 slot，正常注册。
-            // 2. 如果是复用的旧 slot，内核会自动 drop 掉上一个文件，安全释放磁盘！
             if ring
                 .submitter()
                 .register_files_update(slot as u32, &[fd])
@@ -135,7 +161,7 @@ impl RegisteredFiles {
             {
                 self.key_to_slot.insert(key, slot);
             } else {
-                self.free_slots.push(slot); // 失败了把槽位还回去
+                self.free_slots.push(slot);
                 leftovers.push((key, fd));
             }
         }
@@ -747,7 +773,8 @@ impl JobManager {
         self.sub_id_senders = Vec::with_capacity(uring_count);
         let mut sub_id_receivers: Vec<Receiver<Arc<Job>>> = Vec::with_capacity(uring_count);
 
-        // 创建N个通道
+        // Each io_uring worker has its own fixed-file table, so a dispatcher thread copies
+        // every PruneCmd to one channel per worker.
         let mut prune_txs = Vec::with_capacity(uring_count);
         let mut prune_rxs = Vec::with_capacity(uring_count);
 
@@ -755,22 +782,16 @@ impl JobManager {
             let (sub_tx, sub_rx) = unbounded();
             self.sub_id_senders.push(sub_tx);
             sub_id_receivers.push(sub_rx);
-            
-            // 控制通道通常比较小，bounded 即可
-            let (ptx, prx) = crossbeam::channel::bounded::<PruneCmd>(128);
+            let (ptx, prx) = unbounded::<PruneCmd>();
             prune_txs.push(ptx);
             prune_rxs.push(prx);
         }
 
-        
-        // [新增] 2. 启动一个 Dispatcher 线程 (广播员)
-        // 它的唯一工作就是从总接收口拿消息，复制 N 份发给每个 Worker
-        let master_prune_rx = self.prune_receiver.as_ref().expect("Prune receiver not set").clone(); // 假设你在 new() 里已经把 Receiver 放进 self 了
-        
+        let master_prune_rx = self.prune_receiver.as_ref().expect("Prune receiver not set").clone();
         std::thread::spawn(move || {
             while let Ok(cmd) = master_prune_rx.recv() {
                 for tx in &prune_txs {
-                    let _ = tx.send(cmd); // 忽略发送错误（如果 worker 挂了）
+                    let _ = tx.send(cmd);
                 }
             }
         });
@@ -779,10 +800,9 @@ impl JobManager {
         
         for _ in 0..uring_count {
             let sub_id_receiver = sub_id_receivers.pop().unwrap();
-            let prune_receiver = prune_rxs.pop().unwrap(); // [新增] 拿出专属通道
+            let prune_receiver = prune_rxs.pop().unwrap();
             let job_man = job_man.clone();
             std::thread::spawn(move || {
-                // 将 prune_receiver 传入 loop
                 Self::uring_loop(job_man, sub_id_receiver, prune_receiver);
             });
         }
@@ -982,19 +1002,37 @@ impl JobManager {
             slot_idx
         }
 
-        // Receive one batch (blocking or non-blocking) and enqueue its sub-ids.
+        // Receive one batch (blocking or non-blocking) and enqueue its sub-ids. While
+        // blocked, a prune notification also wakes the worker; it is queued in `prunes`
+        // and applied once the submission queue is released.
+        #[allow(clippy::too_many_arguments)]
         fn recv_one_job(
             blocking: bool,
             sub_id_receiver: &Receiver<Arc<Job>>,
+            prune_receiver: &Receiver<PruneCmd>,
+            prunes: &mut Vec<PruneCmd>,
             pending: &mut VecDeque<(usize, u32)>,
             job_slots: &mut Vec<Option<JobSlot>>,
             free_slots: &mut Vec<usize>,
             job_ptr_to_slot: &mut HashMap<usize, usize>,
         ) -> Option<()> {
             let job = if blocking {
-                match sub_id_receiver.recv() {
-                    Ok(b) => b,
-                    Err(_) => return None,
+                crossbeam::channel::select! {
+                    recv(sub_id_receiver) -> msg => match msg {
+                        Ok(b) => b,
+                        Err(_) => return None,
+                    },
+                    recv(prune_receiver) -> cmd => match cmd {
+                        Ok(cmd) => {
+                            prunes.push(cmd);
+                            return Some(());
+                        }
+                        // No more prune notifications: wait for jobs only.
+                        Err(_) => match sub_id_receiver.recv() {
+                            Ok(b) => b,
+                            Err(_) => return None,
+                        },
+                    },
                 }
             } else {
                 match sub_id_receiver.try_recv() {
@@ -1027,11 +1065,12 @@ impl JobManager {
             Some(())
         }
 
+        // Prune notifications received while blocked on the job channel.
+        let mut prunes: Vec<PruneCmd> = Vec::new();
+
         loop {
             while let Ok(cmd) = prune_receiver.try_recv() {
-                let key: u64 = ((cmd.shard_id as u64) << 56) | (cmd.seg_id as u64);
-                // 调用我们在第一步实现的同步驱逐
-                registered_files.evict_sync(&ring, key);
+                registered_files.prune(&ring, cmd.shard_id, cmd.end_seg_id as u64);
             }
 
             let mut sq = ring.submission();
@@ -1046,6 +1085,8 @@ impl JobManager {
                         recv_one_job(
                             true,
                             &sub_id_receiver,
+                            &prune_receiver,
+                            &mut prunes,
                             &mut pending,
                             &mut job_slots,
                             &mut free_slots,
@@ -1055,6 +1096,8 @@ impl JobManager {
                         recv_one_job(
                             false,
                             &sub_id_receiver,
+                            &prune_receiver,
+                            &mut prunes,
                             &mut pending,
                             &mut job_slots,
                             &mut free_slots,
@@ -1082,8 +1125,7 @@ impl JobManager {
                 let entry_file = &job_man.entry_files[sj.shard_id as usize];
                 let logical_off = sj.file_pos % qmdb_common::def::HPFILE_RANGE;
                 let seg_id = logical_off / entry_file.segment_size();
-                let key: u64 =
-                    ((sj.shard_id as u64) << 56) | ((seg_id as u64) & ((1u64 << 56) - 1));
+                let key = seg_key(sj.shard_id as usize, seg_id as u64);
 
                 // Look up registered key, or mark as pending registration
                 let fixed_slot = registered_files.lookup_or_mark_pending(key, raw_fd);
@@ -1098,6 +1140,9 @@ impl JobManager {
             }
             drop(sq);
 
+            for cmd in prunes.drain(..) {
+                registered_files.prune(&ring, cmd.shard_id, cmd.end_seg_id as u64);
+            }
             // Process pending fd registrations (after submission queue is released)
             registered_files.flush_pending(&ring);
 

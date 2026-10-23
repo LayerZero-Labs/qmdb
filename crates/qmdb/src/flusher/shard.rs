@@ -237,18 +237,16 @@ impl FlusherShard {
                 //
                 // If this assumption is violated (e.g., Prefetcher reads old data), io_uring reads
                 // may fail or return garbage due to closed/reused file descriptors.
+                // prune_twigs deletes every entry-file segment below ef_size. Tell the io_uring
+                // workers first, so they unregister those segments and the disk space is
+                // released now rather than when the process exits. A command covers all earlier
+                // ones, so try_send loses nothing that matters if the channel is full (it only
+                // fills without the DIO prefetcher, where nothing reads it).
                 let segment_size = self.tree.get_entry_file_segment_size();
-                let end_seg_id = (ef_size / segment_size) as u32;
-                for seg_id in 0..end_seg_id {
-                    // 发送 PruneCmd。用 try_send 避免阻塞：
-                    // - disable_dio 模式下接收端从不读取 channel，send() 会永久阻塞
-                    // - channel 满时应跳过而不是挂起 flusher
-                    let _ = prune_sender.try_send(PruneCmd {
-                        shard_id: self.shard_id,
-                        seg_id: seg_id as usize,
-                    });
-                }
-
+                let _ = prune_sender.try_send(PruneCmd {
+                    shard_id: self.shard_id,
+                    end_seg_id: (ef_size / segment_size) as usize,
+                });
                 self.tree.prune_twigs(start_twig_id, end_twig_id, ef_size);
             }
         }
