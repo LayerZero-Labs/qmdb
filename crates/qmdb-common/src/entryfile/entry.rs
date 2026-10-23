@@ -29,11 +29,9 @@ use crate::def::{
 use crate::utils::byte0_to_shard_id;
 use crate::utils::byteorder::{BigEndian, LittleEndian};
 use crate::utils::hasher::{blake2b_hash_inplace, blake3_hash_inplace, Hash32};
-use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::ptr;
-use once_cell::race::OnceBox;
 
 /// Index position of the deactivated serial number list length in the entry header.
 const DSN_IDX: usize = 4;
@@ -657,8 +655,6 @@ pub fn entry_equal(bz: &[u8], e: &Entry, deactived_sn_list: &[u64]) -> bool {
 
 #[cfg(test)]
 mod entry_bz_tests {
-    use alloc::boxed::Box;
-
     use super::*;
 
     #[test]

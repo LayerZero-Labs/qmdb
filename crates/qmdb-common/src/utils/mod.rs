@@ -34,8 +34,6 @@ use crate::def::{BIG_BUF_SIZE, SHARD_COUNT};
 use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
-use alloc::alloc::{alloc, Layout};
-use core::slice;
 
 /// Type alias for a large buffer used throughout the database.
 /// The size is defined by BIG_BUF_SIZE.
@@ -48,18 +46,6 @@ pub type BigBuf = [u8];
 pub fn new_big_buf_boxed() -> Box<[u8]> {
     vec![0u8; BIG_BUF_SIZE].into_boxed_slice()
 }
-// pub fn new_big_buf_boxed() -> Box<[u8]> {
-//     unsafe {
-//         // 1. 定义我们需要的内存布局 (大小为 BIG_BUF_SIZE，对齐为 1 字节)
-//         let layout = Layout::array::<u8>(BIG_BUF_SIZE).unwrap();
-        
-//         // 2. 直接向 jemalloc 索要未初始化的内存指针 (极速，不触发缺页写 0)
-//         let ptr = alloc(layout);
-        
-//         // 3. 把裸指针打包成 Rust 的 Box<[u8]>
-//         Box::from_raw(slice::from_raw_parts_mut(ptr, BIG_BUF_SIZE))
-//     }
-// }
 
 /// Maps a byte value to a shard ID.
 ///

@@ -115,9 +115,7 @@ pub type SlotGuard<T> = Guard<Option<Arc<T>>>;
 /// A borrowed reference to a file (via Guard, no refcount overhead).
 pub type FileGuard = SlotGuard<File>;
 
-// ============================================================================
 // Generic Resizable Slots
-// ============================================================================
 
 /// A slot entry storing both id and value.
 ///
@@ -497,9 +495,7 @@ impl<T> std::fmt::Debug for ResizableSlots<T> {
     }
 }
 
-// ============================================================================
 // FileSlots - File-specific wrapper
-// ============================================================================
 
 /// Lock-free file slots using a resizable ring buffer.
 ///
@@ -636,10 +632,6 @@ impl std::fmt::Debug for FileSlots {
             .finish()
     }
 }
-
-// ============================================================================
-// Tests
-// ============================================================================
 
 #[cfg(test)]
 mod tests {
