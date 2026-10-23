@@ -41,12 +41,6 @@ pub struct Cli {
     #[command(flatten)]
     pub hover: HoverWorkloadArgs,
 
-    /// Enable lightweight correctness checking (bitmap model + sampling).
-    /// Only available when the `qmdb_bench_correctness` feature is enabled.
-    #[cfg(feature = "qmdb_bench_correctness")]
-    #[arg(long, default_value_t = false)]
-    pub check_correctness: bool,
-
     /// Start benchmark from an existing database (skip Round 0 population)
     #[arg(long, default_value_t = false)]
     pub start_from_existing: bool,

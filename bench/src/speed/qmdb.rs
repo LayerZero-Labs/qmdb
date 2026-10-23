@@ -80,33 +80,3 @@ pub fn read_kv(shared_ads: &SharedAdsWrap, key_list: &[[u8; 20]]) {
     });
 }
 
-/// Read values for a batch of keys for correctness checking.
-///
-/// Only compiled when the `qmdb_bench_correctness` feature is enabled.
-/// This helper avoids panicking on missing entries and instead returns
-/// `None` for keys that cannot be read.
-#[cfg(feature = "qmdb_bench_correctness")]
-pub fn read_kv_values(tid: usize, key_list: &[[u8; 20]]) -> Vec<Option<Vec<u8>>> {
-    let mut ads = unsafe { ADS[tid].take().expect("ADS not initialized") };
-    let shared_ads = ads.get_shared();
-    let mut buf = ReadBuf::new();
-    let mut result = Vec::with_capacity(key_list.len());
-
-    for k in key_list.iter() {
-        let kh = entry_key_hash(&k[..]);
-        let _ = shared_ads.read_entry(-1, &kh[..], &[], &mut buf);
-        if buf.is_empty() {
-            result.push(None);
-        } else {
-            result.push(Some(buf.as_slice().to_vec()));
-            buf.clear();
-        }
-    }
-
-    unsafe {
-        ADS[tid] = Some(ads);
-    }
-
-    result
-}
-

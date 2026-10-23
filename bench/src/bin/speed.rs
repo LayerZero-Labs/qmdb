@@ -25,19 +25,6 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-#[cfg(feature = "qmdb_bench_correctness")]
-use bench::speed::correctness::{build_key_and_expected_value, BitmapModel};
-
-#[cfg(all(
-    feature = "qmdb_bench_correctness",
-    not(feature = "use_mdbx"),
-    not(feature = "use_rocksdb"),
-    not(feature = "use_nomt"),
-    not(feature = "use_reth"),
-    not(feature = "use_lvmt")
-))]
-use bench::speed::qmdb;
-
 const N_TABLES: usize = 1;
 const PRIME1: u64 = 1299827; // Used for stride for hover_recreate_block
 
@@ -55,9 +42,6 @@ struct RunConfig<'a> {
     /// Zipf exponent for read/write key selection. 0.0 = uniform.
     zipf_theta: f64,
     output_filename: &'a str,
-
-    #[cfg(feature = "qmdb_bench_correctness")]
-    check_correctness: bool,
 }
 
 struct HoverTaskConfig<'a> {
@@ -80,11 +64,6 @@ struct HoverTaskConfig<'a> {
     /// Used to compute per-run stride_offset for delete (no cross-run double-deletion)
     /// and the sequential insert offset above entry_count.
     total_deleted_keys: &'a mut u64,
-
-    #[cfg(feature = "qmdb_bench_correctness")]
-    check_correctness: bool,
-    #[cfg(feature = "qmdb_bench_correctness")]
-    correctness_model: &'a mut Option<BitmapModel>,
 }
 
 struct HoverExecuteConfig<'a> {
@@ -298,18 +277,7 @@ fn main() {
             tasks_per_block as usize,
         );
 
-        // 6. 正确性模型（仅在启用 qmdb_bench_correctness 时生效）
-        #[cfg(feature = "qmdb_bench_correctness")]
-        let correctness_model = if args.check_correctness {
-            let entry_count_wo_del = args.entry_count * 9 / 10;
-            Some(BitmapModel::new(args.entry_count, entry_count_wo_del))
-        } else {
-            None
-        };
-        #[cfg(not(feature = "qmdb_bench_correctness"))]
-        let correctness_model: Option<()> = None;
-
-        // 7. 运行 Benchmark
+        // 6. 运行 Benchmark
         run(
             RunConfig {
                 table_id,
@@ -322,10 +290,7 @@ fn main() {
                 hover_write_block: args.hover.hover_write_block,
                 zipf_theta: args.hover.hover_zipf_theta,
                 output_filename: args.output_filename.as_str(),
-                #[cfg(feature = "qmdb_bench_correctness")]
-                check_correctness: args.check_correctness,
             },
-            correctness_model,
             initial_height,
         );
     }
@@ -333,8 +298,6 @@ fn main() {
 
 fn run(
     config: RunConfig,
-    #[cfg(feature = "qmdb_bench_correctness")] mut correctness_model: Option<BitmapModel>,
-    #[cfg(not(feature = "qmdb_bench_correctness"))] _correctness_model: Option<()>,
     initial_height: i64,
 ) {
     let RunConfig {
@@ -348,8 +311,6 @@ fn run(
         hover_write_block,
         zipf_theta,
         output_filename,
-        #[cfg(feature = "qmdb_bench_correctness")]
-        check_correctness,
     } = config;
 
     let blk_in_round = test_gen.block_in_round();
@@ -400,15 +361,6 @@ fn run(
             // 1. 生成population的block
             let task_list = test_gen.gen_block();
 
-            #[cfg(feature = "qmdb_bench_correctness")]
-            if check_correctness {
-                if let Some(model) = correctness_model.as_mut() {
-                    // During population we only update the bitmap model; sampling
-                    // and DB comparisons are performed during TPS benchmarking.
-                    model.apply_block(&task_list);
-                }
-            }
-            
             // 2. 提交block至backend database
             db_backend::create_kv(table_id, height, task_list);
             height += 1;
@@ -468,10 +420,6 @@ fn run(
                     is_final,
                     results,
                     total_deleted_keys: &mut total_deleted_keys,
-                    #[cfg(feature = "qmdb_bench_correctness")]
-                    check_correctness,
-                    #[cfg(feature = "qmdb_bench_correctness")]
-                    correctness_model: &mut correctness_model,
                 });
 
                 // Hover test 结束的时间
@@ -591,10 +539,6 @@ fn run(
             is_final: true,
             results,
             total_deleted_keys: &mut total_deleted_keys,
-            #[cfg(feature = "qmdb_bench_correctness")]
-            check_correctness,
-            #[cfg(feature = "qmdb_bench_correctness")]
-            correctness_model: &mut correctness_model,
         });
 
         // 记录一下时间，虽然不计入 population throughput，但有助于日志对齐
@@ -629,10 +573,6 @@ fn run_hover_tasks(config: HoverTaskConfig) {
         is_final,
         results,
         total_deleted_keys,
-        #[cfg(feature = "qmdb_bench_correctness")]
-        check_correctness,
-        #[cfg(feature = "qmdb_bench_correctness")]
-        correctness_model,
     } = config;
 
     let op_in_blk = test_gen.num_op_in_blk();
@@ -737,22 +677,6 @@ fn run_hover_tasks(config: HoverTaskConfig) {
         *total_deleted_keys += n_hover_ops;
     } else {
         println!("skip hover delete and insert blocks (db too small)");
-    }
-
-    #[cfg(all(
-        feature = "qmdb_bench_correctness",
-        not(feature = "use_mdbx"),
-        not(feature = "use_rocksdb"),
-        not(feature = "use_nomt"),
-        not(feature = "use_reth"),
-        not(feature = "use_lvmt")
-    ))]
-    if check_correctness {
-        if let Some(model) = correctness_model.as_mut() {
-            db_backend::flush(table_id);
-            // Reuse the current `max_num` as the upper bound for sampling.
-            run_hover_correctness_sampling(table_id, max_num, test_gen, model, randsrc, results);
-        }
     }
 
     let db_size_bytes = dir_size(Path::new(db_dir));
@@ -862,10 +786,10 @@ fn hover_execute_op(config: HoverExecuteConfig) {
                 OP_DELETE => db_backend::delete_kv(table_id, blk_height, tasks),
                 OP_WRITE => db_backend::update_kv(table_id, blk_height, tasks),
                 OP_READ => {
-                    #[cfg(all(not(feature = "use_mdbx"), not(feature = "use_rocksdb"), not(feature = "use_nomt"), not(feature = "use_reth"), not(feature = "use_lvmt")))]
+                    #[cfg(all(not(feature = "use_nomt"), not(feature = "use_reth"), not(feature = "use_lvmt")))]
                     db_backend::update_kv(table_id, blk_height, tasks);
 
-                    #[cfg(any(feature = "use_mdbx", feature = "use_rocksdb", feature = "use_nomt", feature = "use_reth", feature = "use_lvmt"))]
+                    #[cfg(any(feature = "use_nomt", feature = "use_reth", feature = "use_lvmt"))]
                     db_backend::read_kv(table_id, tasks);
                 }
                 _ => panic!("invalid op_type: {}", op_type),
@@ -972,8 +896,6 @@ fn run_single_hover_block(config: SingleHoverBlockConfig) -> Vec<RwLock<Option<S
     if let Some(ps) = pre_sampled {
         let height_val = *height;
         let is_qmdb = cfg!(all(
-            not(feature = "use_mdbx"),
-            not(feature = "use_rocksdb"),
             not(feature = "use_nomt"),
             not(feature = "use_reth"),
             not(feature = "use_lvmt")
@@ -1065,8 +987,6 @@ fn run_single_hover_block(config: SingleHoverBlockConfig) -> Vec<RwLock<Option<S
                 
                 // if this is qmdb, then we need at least 1 write for read block to have block id += 1
                 let is_qmdb = cfg!(all(
-                    not(feature = "use_mdbx"),
-                    not(feature = "use_rocksdb"),
                     not(feature = "use_nomt"),
                     not(feature = "use_reth"),
                     not(feature = "use_lvmt")
@@ -1898,190 +1818,4 @@ fn print_unified_report(
     result_log::write_line(&format!("  > OS Physical Write = {} bytes ({:.2} MB)", os_write_bytes, os_write_bytes as f64 / 1024.0 / 1024.0));
     result_log::write_line(&format!("  > OS Physical Read  = {} bytes ({:.2} MB)", os_read_bytes, os_read_bytes as f64 / 1024.0 / 1024.0));
     result_log::write_line("----------------------------------------------------------------");
-}
-
-/// Perform lightweight correctness sampling during hover reads.
-///
-/// This is only enabled for the QMDB backend (no `use_mdbx` / `use_rocksdb`)
-/// and when the `qmdb_bench_correctness` feature is active.
-#[cfg(all(
-    feature = "qmdb_bench_correctness",
-    not(feature = "use_mdbx"),
-    not(feature = "use_rocksdb"),
-    not(feature = "use_reth"),
-    not(feature = "use_lvmt")
-))]
-fn run_hover_correctness_sampling(
-    table_id: usize,
-    max_num: u64,
-    _test_gen: &mut TestGenV2,
-    model: &BitmapModel,
-    randsrc: &mut RandSrc,
-    results: &mut BenchmarkResults,
-) {
-    // Limit the number of samples per hover invocation to keep overhead low.
-    const MAX_SAMPLES: usize = 128;
-
-    let mut key_list: Vec<[u8; 20]> = Vec::new();
-    let mut expected_values: Vec<[u8; 32]> = Vec::new();
-    let mut expected_exists: Vec<bool> = Vec::new();
-    let mut expected_rounds: Vec<u32> = Vec::new();
-
-    // We sample from the "interesting" ranges:
-    // - Stable range: [0, entry_count_wo_del), which should always exist.
-    // - Deletable range: only indices that are still marked as existing.
-    //
-    // New high-numbered entries are currently not tracked by the bitmap model
-    // and are therefore skipped in this sampling routine.
-
-    let entry_count_wo_del = model.entry_count_wo_del;
-
-    // If we haven't yet populated the full stable range, skip sampling to
-    // avoid treating not-yet-created keys as existing ones.
-    if max_num < entry_count_wo_del {
-        return;
-    }
-
-    // Helper closure: try to add one sample for a given logical `num`.
-    let mut try_add_sample = |num: u64| {
-        if key_list.len() >= MAX_SAMPLES {
-            return;
-        }
-
-        // Determine existence state according to the bitmap model:
-        //   Some(true)  => key should exist
-        //   Some(false) => key should have been deleted
-        //   None        => key is outside tracked ranges; skip
-        let exists_state = model.existence_state(num);
-        let Some(should_exist) = exists_state else {
-            return;
-        };
-
-        // Decide expected "round" for the value when it should exist:
-        // - Stable range: round 0 if never updated, 1 if updated at least once.
-        // - Deletable range: values are created in round 0 and never updated.
-        let expected_round: u32 = if num < entry_count_wo_del {
-            if model.is_updated(num) {
-                1
-            } else {
-                0
-            }
-        } else {
-            0
-        };
-
-        let (k, v) = build_key_and_expected_value(num, expected_round);
-        key_list.push(k);
-        expected_values.push(v);
-        expected_exists.push(should_exist);
-        expected_rounds.push(expected_round);
-    };
-
-    // 1) Sample from the stable range.
-    if entry_count_wo_del > 0 {
-        let samples = (MAX_SAMPLES / 2).max(1) as u64;
-        for _ in 0..samples {
-            let num = rand_between(randsrc, 0, entry_count_wo_del as usize) as u64;
-            try_add_sample(num);
-        }
-    }
-
-    // 2) Sample from the deletable range (only if any entries are tracked there).
-    if model.delete_count > 0 {
-        let delete_span = model.delete_count as usize;
-        let samples = (MAX_SAMPLES / 2).max(1) as u64;
-        for _ in 0..samples {
-            let offset = rand_between(randsrc, 0, delete_span) as u64;
-            let num = entry_count_wo_del + offset;
-            try_add_sample(num);
-        }
-    }
-
-    if key_list.is_empty() {
-        return;
-    }
-
-    // Perform the actual reads from QMDB and compare with expected values.
-    let actual_values = qmdb::read_kv_values(table_id, &key_list);
-    let mut mismatches = 0u64;
-
-    for (idx, actual_opt) in actual_values.into_iter().enumerate() {
-        let expected = &expected_values[idx];
-        let should_exist = expected_exists[idx];
-        let expected_round = expected_rounds[idx];
-        match (should_exist, actual_opt) {
-            // Expected to exist but missing in DB.
-            (true, None) => {
-                mismatches += 1;
-                eprintln!(
-                    "QMDB correctness: missing key for sampled num={} (table_id={})",
-                    {
-                        let mut buf = [0u8; 8];
-                        buf.copy_from_slice(&key_list[idx][12..20]);
-                        u64::from_be_bytes(buf)
-                    },
-                    table_id
-                );
-            }
-            // Expected to exist, and we got a value – compare contents.
-            (true, Some(actual)) => {
-                let entry = EntryBz { bz: &actual };
-                // Check if actual bytes are enough to be a valid entry or at least parse the header
-                // We trust QMDB returns valid entries, but let's be safe against empty/garbage
-                if actual.len() < 5 {
-                    mismatches += 1;
-                    eprintln!("QMDB correctness: read invalid entry (too short) for sampled idx");
-                    continue;
-                }
-                let actual_val = entry.value();
-
-                if actual_val != expected.as_slice() {
-                    mismatches += 1;
-                    let num = {
-                        let mut buf = [0u8; 8];
-                        buf.copy_from_slice(&key_list[idx][12..20]);
-                        u64::from_be_bytes(buf)
-                    };
-                    eprintln!(
-                        "QMDB correctness: value mismatch for sampled num={} (table_id={})",
-                        num, table_id
-                    );
-                    eprintln!("  Expected: {}", hex::encode(expected));
-                    eprintln!("  Actual:   {}", hex::encode(actual_val));
-                    eprintln!("  Expected Round: {}", expected_round);
-                    eprintln!("  Updated in Model: {}", model.is_updated(num));
-                }
-            }
-            // Expected to be deleted, but DB still returns a value.
-            (false, Some(_actual)) => {
-                mismatches += 1;
-                eprintln!(
-                    "QMDB correctness: key should have been deleted for sampled num={} (table_id={})",
-                    {
-                        let mut buf = [0u8; 8];
-                        buf.copy_from_slice(&key_list[idx][12..20]);
-                        u64::from_be_bytes(buf)
-                    },
-                    table_id
-                );
-            }
-            // Expected to be deleted and DB returns None: OK.
-            (false, None) => {}
-        }
-    }
-
-    if mismatches > 0 {
-        // For now we just print and record a summary entry. This can be
-        // extended later to keep detailed error samples in `BenchmarkResults`.
-        println!(
-            "QMDB correctness: {} mismatches detected in {} sampled reads",
-            mismatches,
-            key_list.len()
-        );
-        results
-            .summary
-            .entry("correctness.hover_mismatches".to_string())
-            .and_modify(|v| *v += mismatches as f64)
-            .or_insert(mismatches as f64);
-    }
 }

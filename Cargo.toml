@@ -65,7 +65,6 @@ libc = "0.2.170"
 notify = "8.2.0"
 
 # Storage backends
-reth-libmdbx = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.1.2" }
 rocksdb = "0.22.0"
 
 # Linux-specific
