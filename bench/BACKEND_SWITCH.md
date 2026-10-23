@@ -28,17 +28,9 @@ swap them before `cargo build`.
 ./switch_backend.sh status  # which mode is active right now
 ```
 
-`run_lvmt_benchmark.sh` and `run_reth_benchmark.sh` already call this
-automatically before `cargo build`, so a one-line invocation works:
-
-```sh
-bash run_reth_benchmark.sh   # auto-switches to reth-mode
-bash run_lvmt_benchmark.sh   # auto-switches back to lvmt-mode
-```
-
-`run_qmdb_benchmark.sh` and `run_nomt_*.sh` work in lvmt-mode (default) —
-LVMT deps are gated by `optional = true`, so they don't get pulled in for
-qmdb/nomt builds.
+Run it before `cargo build`. QMDB and NOMT builds work in lvmt-mode (the
+default): LVMT deps are gated by `optional = true`, so they are not pulled in
+for qmdb/nomt builds.
 
 ## Drift check
 
