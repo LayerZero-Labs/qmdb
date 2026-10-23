@@ -2,8 +2,6 @@
 
 use std::path::Path;
 use std::collections::hash_map::Entry;
-use std::time::{Instant, SystemTime, UNIX_EPOCH}; // [新增] SystemTime
-use std::sync::Arc; 
 
 use parking_lot::RwLock;
 use lazy_static::lazy_static;
@@ -20,19 +18,7 @@ use qmdb_common::task::task::Task;
 use qmdb::test_helper::SimpleTask;
 use qmdb_common::def::{OP_CREATE, OP_DELETE, OP_WRITE, OP_READ};
 
-// -----------------------------------------------------------------------------
-// Helper: 获取当前微秒时间戳
-// -----------------------------------------------------------------------------
-fn current_micros() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("Time went backwards")
-        .as_micros()
-}
-
-// -----------------------------------------------------------------------------
 // 1. 全局单例
-// -----------------------------------------------------------------------------
 
 struct GlobalNomt {
     nomt: Nomt<Blake3Hasher>,
@@ -42,9 +28,7 @@ lazy_static! {
     static ref GLOBAL_NOMT: RwLock<Option<GlobalNomt>> = RwLock::new(None);
 }
 
-// -----------------------------------------------------------------------------
 // 2. 初始化
-// -----------------------------------------------------------------------------
 pub fn init(db_dir: &str, start_from_existing: bool) {
     let path = Path::new(db_dir);
     
@@ -70,9 +54,7 @@ pub fn init(db_dir: &str, start_from_existing: bool) {
     *global = Some(GlobalNomt { nomt });
 }
 
-// -----------------------------------------------------------------------------
 // 3. 核心逻辑 (修复版)
-// -----------------------------------------------------------------------------
 
 struct TaskExecutor<'a> {
     session: &'a Session<Blake3Hasher>,
@@ -118,10 +100,7 @@ impl<'a> TaskExecutor<'a> {
     }
 }
 
-pub fn execute_batch(block_height: i64, task_list: Vec<RwLock<Option<SimpleTask>>>) {
-    let ts_recv = current_micros();
-    println!("[PERF] block={} stage=received ts={}", block_height, ts_recv);
-    
+pub fn execute_batch(_block_height: i64, task_list: Vec<RwLock<Option<SimpleTask>>>) {
     let global_guard = GLOBAL_NOMT.read();
     let nomt_ref = &global_guard.as_ref().expect("Nomt not initialized").nomt;
 
@@ -187,31 +166,18 @@ pub fn execute_batch(block_height: i64, task_list: Vec<RwLock<Option<SimpleTask>
 
     // 如果该 Block 只有纯读，直接返回，避免 IO 和 Commit 损耗
     if actual_access.is_empty() {
-        let ts_finished = current_micros();
-        println!("[PERF] block={} stage=finished (read-only) ts={}", block_height, ts_finished);
         return;
     }
 
     // 3. Parallel Sort (现在数组变小了极多，排序速度会快几十倍)
     actual_access.par_sort_unstable_by(|a, b| a.0.cmp(&b.0));
 
-    let ts_sorted = current_micros();
-    println!("[PERF] block={} stage=sorted ts={}", block_height, ts_sorted);
-
     let finished = session.finish(actual_access).unwrap();
     
-    let ts_committing = current_micros();
-    println!("[PERF] block={} stage=committing ts={}", block_height, ts_committing);
-    
     finished.commit(nomt_ref).unwrap();
-    
-    let ts_finished = current_micros();
-    println!("[PERF] block={} stage=finished ts={}", block_height, ts_finished);
 }
 
-// -----------------------------------------------------------------------------
 // 4. 接口适配 (统一调用 execute_batch)
-// -----------------------------------------------------------------------------
 
 pub fn create_kv(height: i64, task_list: Vec<RwLock<Option<SimpleTask>>>) {
     execute_batch(height, task_list);
@@ -226,9 +192,6 @@ pub fn delete_kv(height: i64, task_list: Vec<RwLock<Option<SimpleTask>>>) {
 }
 
 pub fn read_kv(task_list: Vec<RwLock<Option<SimpleTask>>>) {
-    let ts_recv = current_micros();
-    println!("[PERF] stage=read_kv_received ts={}", ts_recv);
-
     let global_guard = GLOBAL_NOMT.read();
     let nomt_ref = &global_guard.as_ref().expect("Nomt not initialized").nomt;
 
@@ -252,49 +215,4 @@ pub fn read_kv(task_list: Vec<RwLock<Option<SimpleTask>>>) {
             }
         }
     });
-
-    let ts_finished = current_micros();
-    println!("[PERF] stage=read_kv_finished ts={}", ts_finished);
 }
-
-// pub fn read_kv(task_list: Vec<RwLock<Option<SimpleTask>>>) {
-//     let ts_recv = current_micros();
-//     println!("[PERF] stage=read_kv_received ts={}", ts_recv);
-
-//     let global_guard = GLOBAL_NOMT.read();
-//     let nomt_ref = &global_guard.as_ref().expect("Nomt not initialized").nomt;
-
-//     // 1. 开启一个轻量级的只读 Session
-//     // 它的开销极低，只负责提供一个一致性的多版本视图，避免读写冲突
-//     let session_params = SessionParams::default().witness_mode(WitnessMode::disabled());
-//     let session = nomt_ref.begin_session(session_params);
-
-//     // 2. 利用 Rayon 并发迭代，直接使用 session.read
-//     // 完全抛弃 TaskExecutor、抛弃 HashMap 分配，零额外内存开销
-//     task_list.par_iter().for_each(|task_lock| {
-//         let task_opt = task_lock.read();
-//         if let Some(task) = task_opt.as_ref() {
-//             for cset in task.get_change_sets().iter() {
-//                 cset.for_each_op(|_op_type, _shard_id, key_hash, _key, _value, _old_value, _rec| {
-//                     let mut h = [0u8; 32];
-//                     let len = key_hash.len().min(32);
-//                     h[0..len].copy_from_slice(&key_hash[0..len]);
-//                     let key_path = KeyPath::from(h);
-
-//                     // 【核心修复】：直接调用 session.read
-//                     // 因为这里只需要 &self，所以可以无锁并发命中底层的 Page Cache
-//                     let _val = session.read(key_path).unwrap(); 
-//                 });
-//             }
-//         }
-//     });
-
-//     // 3. 纯读操作，直接让 session 离开作用域自然 Drop 即可，不需要 finish 和 commit。
-//     let ts_finished = current_micros();
-//     println!("[PERF] stage=read_kv_finished ts={}", ts_finished);
-// }
-
-// pub fn read_kv(task_list: Vec<RwLock<Option<SimpleTask>>>) {
-//     // 纯读现在也可以复用 execute_batch 啦，为了兼容参数，可以传 0 或者特俗的高度标识
-//     execute_batch(0, task_list);
-// }

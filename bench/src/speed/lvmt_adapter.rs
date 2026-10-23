@@ -15,15 +15,7 @@ use lvmt_db::{
 };
 
 use cfx_kvdb_rocksdb::{CompactionProfile, Database, DatabaseConfig};
-use std::time::Instant;
-use std::sync::atomic::{AtomicU64, Ordering as AtomicOrd};
 
-static ADAPTER_GET_US: AtomicU64 = AtomicU64::new(0);
-static ADAPTER_GET_COUNT: AtomicU64 = AtomicU64::new(0);
-static ADAPTER_COMMIT_US: AtomicU64 = AtomicU64::new(0);
-static ADAPTER_COMMIT_COUNT: AtomicU64 = AtomicU64::new(0);
-
-// ---------------------------------------------------------------------------
 // Single-shard mode matching LVMT's own benchmark with --shards 16.
 //
 // LVMT's design (from the paper): each full node only maintains proof
@@ -38,7 +30,6 @@ static ADAPTER_COMMIT_COUNT: AtomicU64 = AtomicU64::new(0);
 //
 // This exactly matches LVMT's --shards 16 benchmark behavior and represents
 // the per-node workload in a 16-node deployment.
-// ---------------------------------------------------------------------------
 // SHARD_LOG2=0 means no proof sharding: this node maintains full AMT proof
 // metadata for all keys (equivalent to --shards 1 in LVMT's own benchmark).
 const SHARD_LOG2: usize = 4;
@@ -65,9 +56,6 @@ lazy_static! {
     static ref GLOBAL_LVMT: Mutex<Option<GlobalLvmt>> = Mutex::new(None);
 }
 
-// ---------------------------------------------------------------------------
-// init
-// ---------------------------------------------------------------------------
 pub fn init(db_dir: &str, _start_from_existing: bool) {
     let _ = std::fs::remove_dir_all(db_dir);
     std::fs::create_dir_all(db_dir).expect("Failed to create db dir");
@@ -112,9 +100,6 @@ pub fn init(db_dir: &str, _start_from_existing: bool) {
     *GLOBAL_LVMT.lock().unwrap() = Some(GlobalLvmt { db: LvmtShard(db) });
 }
 
-// ---------------------------------------------------------------------------
-// execute_writes
-// ---------------------------------------------------------------------------
 fn execute_writes(height: i64, task_list: Vec<RwLock<Option<SimpleTask>>>) {
     // Collect all ops across the entire block, sort by key (matches LVMT official
     // benchmark: ~/lvmt/benchmarks/src/run.rs warmup() sorts before db.set).
@@ -132,9 +117,7 @@ fn execute_writes(height: i64, task_list: Vec<RwLock<Option<SimpleTask>>>) {
             }
         }
     }
-    let t_sort = Instant::now();
     all_ops.sort_by(|(k1, _, _), (k2, _, _)| k1.cmp(k2));
-    let sort_us = t_sort.elapsed().as_micros();
 
     let mut global = GLOBAL_LVMT.lock().unwrap();
     let g = global.as_mut().expect("LVMT not initialized");
@@ -155,23 +138,11 @@ fn execute_writes(height: i64, task_list: Vec<RwLock<Option<SimpleTask>>>) {
             _ => {}
         }
     }
-    println!("[LVMT block_sort] {} ops sorted in {}us", all_ops.len(), sort_us);
 
-    let t_commit = Instant::now();
     db.commit(height as u64).unwrap();
-    let commit_us = t_commit.elapsed().as_micros() as u64;
-    let cnt = ADAPTER_COMMIT_COUNT.fetch_add(1, AtomicOrd::Relaxed) + 1;
-    ADAPTER_COMMIT_US.fetch_add(commit_us, AtomicOrd::Relaxed);
-    if cnt % 10 == 0 {
-        let total_us = ADAPTER_COMMIT_US.load(AtomicOrd::Relaxed);
-        println!("[ADAPTER commit #{}] this={}ms | avg={}ms",
-            cnt, commit_us / 1000, total_us / cnt / 1000);
-    }
 }
 
-// ---------------------------------------------------------------------------
 // Public interface
-// ---------------------------------------------------------------------------
 
 pub fn create_kv(height: i64, task_list: Vec<RwLock<Option<SimpleTask>>>) {
     execute_writes(height, task_list);
@@ -190,9 +161,6 @@ pub fn read_kv(task_list: Vec<RwLock<Option<SimpleTask>>>) {
     let g = global.as_ref().expect("LVMT not initialized");
     let db = &g.db.0;
 
-    let mut block_get_us: u64 = 0;
-    let mut block_get_count: u64 = 0;
-
     for task_lock in &task_list {
         let task_opt = task_lock.read();
         if let Some(task) = task_opt.as_ref() {
@@ -200,28 +168,10 @@ pub fn read_kv(task_list: Vec<RwLock<Option<SimpleTask>>>) {
                 cset.for_each_op(
                     |_op_type, _shard_id, key_hash: &[u8; 32], _key, _value: &[u8], _old_value, _rec| {
                         let k = Key(key_hash.to_vec());
-                        let t = Instant::now();
                         let _ = db.get(&k);
-                        block_get_us += t.elapsed().as_micros() as u64;
-                        block_get_count += 1;
                     },
                 );
             }
         }
-    }
-
-    let prev_count = ADAPTER_GET_COUNT.fetch_add(block_get_count, AtomicOrd::Relaxed);
-    ADAPTER_GET_US.fetch_add(block_get_us, AtomicOrd::Relaxed);
-    let new_count = prev_count + block_get_count;
-    // Print every ~10 blocks (each block has ~10000 ops)
-    if new_count / 100000 > prev_count / 100000 {
-        let total_us = ADAPTER_GET_US.load(AtomicOrd::Relaxed);
-        println!(
-            "[ADAPTER read_kv] this_block: count={} avg={:.2}us/op | cumulative: count={} avg={:.2}us/op",
-            block_get_count,
-            if block_get_count > 0 { block_get_us as f64 / block_get_count as f64 } else { 0.0 },
-            new_count,
-            if new_count > 0 { total_us as f64 / new_count as f64 } else { 0.0 },
-        );
     }
 }

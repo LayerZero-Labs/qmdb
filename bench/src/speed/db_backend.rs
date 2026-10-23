@@ -1,10 +1,7 @@
 use parking_lot::RwLock;
 use qmdb::test_helper::SimpleTask;
 use std::path::Path;
-use qmdb::{metadb::MetaDB, indexer::Indexer};
-use std::sync::Arc;
 
-// =================== NAME =====================
 #[cfg(feature = "use_mdbx")]
 pub const NAME: &str = "MDBX";
 
@@ -23,8 +20,6 @@ pub const NAME: &str = "LVMT";
 #[cfg(all(not(feature = "use_mdbx"), not(feature = "use_rocksdb"), not(feature = "use_nomt"), not(feature = "use_reth"), not(feature = "use_lvmt")))]
 pub const NAME: &str = "QMDB";
 
-
-// =================== INIT =====================
 #[cfg(feature = "use_mdbx")]
 pub fn init(db_dir: &str, _: usize, _: bool, _: bool, _: u64) {
     let path = Path::new(db_dir).join("MDBX");
@@ -61,8 +56,6 @@ pub fn init(db_dir: &str, table_id: usize, _: bool, _: bool, _: u64) {
     crate::speed::qmdb::init(path.to_str().unwrap(), table_id);
 }
 
-
-// =================== CREATE =====================
 #[cfg(feature = "use_mdbx")]
 pub fn create_kv(_: usize, height: i64, task_list: Vec<RwLock<Option<SimpleTask>>>) {
     crate::speed::mdbx::create_kv(height, task_list);
@@ -93,8 +86,6 @@ pub fn create_kv(table_id: usize, height: i64, task_list: Vec<RwLock<Option<Simp
     crate::speed::qmdb::create_kv(table_id, height, task_list);
 }
 
-
-// =================== UPDATE =====================
 #[cfg(feature = "use_mdbx")]
 pub fn update_kv(_: usize, height: i64, task_list: Vec<RwLock<Option<SimpleTask>>>) {
     crate::speed::mdbx::update_kv(height, task_list);
@@ -126,8 +117,6 @@ pub fn update_kv(table_id: usize, height: i64, task_list: Vec<RwLock<Option<Simp
     crate::speed::qmdb::update_kv(table_id, height, task_list);
 }
 
-
-// =================== DELETE =====================
 #[cfg(feature = "use_mdbx")]
 pub fn delete_kv(height: i64, task_list: Vec<RwLock<Option<SimpleTask>>>) {
     crate::speed::mdbx::delete_kv(height, task_list);
@@ -158,8 +147,6 @@ pub fn delete_kv(table_id: usize, height: i64, task_list: Vec<RwLock<Option<Simp
     crate::speed::qmdb::delete_kv(table_id, height, task_list);
 }
 
-
-// =================== READ =====================
 #[cfg(feature = "use_mdbx")]
 pub fn read_kv(_: usize, key_list: &Vec<[u8; 20]>) {
     crate::speed::mdbx::read_kv(key_list);
@@ -187,11 +174,8 @@ pub fn read_kv(_: usize, key_list: Vec<RwLock<Option<SimpleTask>>>) {
 
 #[cfg(all(not(feature = "use_mdbx"), not(feature = "use_rocksdb"), not(feature = "use_nomt"), not(feature = "use_reth"), not(feature = "use_lvmt")))]
 pub fn read_kv(_: usize, _: &Vec<[u8; 20]>) {
-    // crate::speed::qmdb::read_kv(key_list);
 }
 
-
-// =================== FLUSH =====================
 #[cfg(any(feature = "use_mdbx", feature = "use_rocksdb", feature = "use_nomt", feature = "use_reth", feature = "use_lvmt"))]
 pub fn flush(_: usize) {}
 
@@ -200,19 +184,6 @@ pub fn flush(table_id: usize) {
     crate::speed::qmdb::flush(table_id);
 }
 
-
-// =================== STUB =====================
-#[cfg(any(feature = "use_mdbx", feature = "use_rocksdb", feature = "use_nomt", feature = "use_reth", feature = "use_lvmt"))]
-pub fn get_db_handles(_table_id: usize) -> Option<(Arc<RwLock<MetaDB>>, Arc<Indexer>)> {
-    None
-}
-
-#[cfg(all(not(feature = "use_mdbx"), not(feature = "use_rocksdb"), not(feature = "use_nomt"), not(feature = "use_reth"), not(feature = "use_lvmt")))]
-pub fn get_db_handles(table_id: usize) -> Option<(Arc<RwLock<MetaDB>>, Arc<Indexer>)> {
-    crate::speed::qmdb::get_db_handles(table_id)
-}
-
-// =================== WARMUP (RETH ONLY) =====================
 #[cfg(feature = "use_reth")]
 pub fn warmup_trie() {
     crate::speed::reth_adapter::warmup_trie();

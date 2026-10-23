@@ -189,12 +189,6 @@ impl BenchmarkResults {
     pub fn write_to_file(&mut self, filename: &str) {
         self.elapsed_s = self.start_time.elapsed().as_secs_f64();
         self.summary.clear();
-        // for (key, value) in &self.tputs {
-        //     self.summary.insert(
-        //         format!("{key}.throughput_per_sec"),
-        //         value.get_last_throughput(),
-        //     );
-        // }
         for (key, value) in &self.tputs {
             let k = format!("{key}.throughput_per_sec");
             let v = value.get_last_throughput();
@@ -389,11 +383,6 @@ impl BenchmarkResults {
                 write_bytes as f64,
             );
             self.log_sample(&format!("diskstats.{}.utilization", disk.name), utilization);
-
-            // println!(
-            //     "Device {}: read_ios={}, write_ios={}, read_bytes={}B, write_bytes={}B, utilization={:.2}s",
-            //     disk.name, disk.reads_completed, disk.writes_completed, read_bytes, write_bytes, utilization
-            // );
         }
     }
 

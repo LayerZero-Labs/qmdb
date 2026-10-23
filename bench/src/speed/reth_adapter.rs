@@ -4,7 +4,6 @@
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 use parking_lot::RwLock;
 use rayon::prelude::*;
 use byteorder::{BigEndian, ByteOrder};
@@ -13,21 +12,16 @@ use std::time::Duration;
 // Reth imports
 use alloy_primitives::{Address, B256, U256, keccak256};
 use reth_db::tables;
-use reth_db_api::cursor::{DbCursorRO, DbCursorRW, DbDupCursorRO, DbDupCursorRW};
-use reth_db_api::transaction::{DbTx, DbTxMut};
+use reth_db_api::cursor::{DbCursorRO, DbDupCursorRO};
+use reth_db_api::transaction::DbTx;
 use reth_node_types::NodeTypesWithDBAdapter;
-use reth_primitives::{Account, StorageEntry};
+use reth_primitives::Account;
 use reth_provider::{ProviderFactory, StateChangeWriter, TrieWriter};
-use reth_provider::{AccountReader, StateProvider, StorageReader};
 use reth_provider::providers::{StaticFileProvider, ConsistentDbView};
 use reth_provider::test_utils::MockNodeTypes;
-use reth_trie::{StorageTrieEntry, StoredNibbles, StoredNibblesSubKey, TrieInput};
-use reth_trie::{HashedPostState, HashedStorage, StateRoot};
-use reth_trie::hashed_cursor::HashedPostStateCursorFactory;
-use reth_trie::trie_cursor::InMemoryTrieCursorFactory;
+use reth_trie::TrieInput;
+use reth_trie::{HashedPostState, HashedStorage};
 use reth_trie::updates::TrieUpdates;
-use reth_trie_db::DatabaseStateRoot;
-use reth_trie_db::{DatabaseTrieCursorFactory, DatabaseHashedCursorFactory};
 use reth_trie_parallel::parallel_root::ParallelStateRoot;
 
 use reth_db::mdbx::MaxReadTransactionDuration;
@@ -76,10 +70,6 @@ lazy_static::lazy_static! {
 /// =1 → commit every block (simplest, no in-memory trie caching benefit).
 /// >1 → amortises MDBX write-transaction overhead and enables trie node caching.
 const BATCH_SIZE: usize = 1;
-
-fn current_micros() -> u128 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros()
-}
 
 /// Parse a big-endian U256 from a variable-length byte slice (up to 32 bytes).
 fn parse_u256(value: &[u8]) -> U256 {
@@ -145,13 +135,11 @@ pub fn init(db_dir: &str, start_from_existing: bool, is_eth_mode: bool, entry_co
 ///   account and storage tries.  For the synthetic (account-only) workload the
 ///   storage-root subtasks resolve immediately (empty storage → EMPTY_ROOT_HASH),
 ///   adding some rayon-dispatch overhead but keeping the code path uniform.
-pub fn execute_batch(block_height: i64, task_list: Vec<RwLock<Option<SimpleTask>>>) {
+pub fn execute_batch(_block_height: i64, task_list: Vec<RwLock<Option<SimpleTask>>>) {
     let factory_guard = RETH_FACTORY.read();
     let factory = factory_guard.as_ref().unwrap();
 
-    // =========================================================
     // Phase 1: Parallel per-thread HashedPostState computation
-    // =========================================================
     let local_hashed_state = task_list
         .into_par_iter()
         .fold(
@@ -270,10 +258,8 @@ pub fn execute_batch(block_height: i64, task_list: Vec<RwLock<Option<SimpleTask>
             },
         );
 
-    // =========================================================
     // Phase 2: Accumulate into pool, extract trie-input snapshot
     // (write lock held only for this brief section)
-    // =========================================================
     let (trie_input, should_write) = {
         let mut pool = BATCH_POOL.write();
         pool.hashed_state.extend(local_hashed_state);
@@ -298,9 +284,7 @@ pub fn execute_batch(block_height: i64, task_list: Vec<RwLock<Option<SimpleTask>
         (trie_input, should_write)
     }; // Pool write lock released here — Phase 3 runs without holding it.
 
-    // =========================================================
     // Phase 3: Heavy trie root computation (lock-free)
-    // =========================================================
     // `ConsistentDbView` pins a consistent DB snapshot for the duration of
     // the parallel storage-root tasks and the account-trie walk.
     let view = ConsistentDbView::new(factory.clone(), None);
@@ -308,10 +292,8 @@ pub fn execute_batch(block_height: i64, task_list: Vec<RwLock<Option<SimpleTask>
         .incremental_root_with_updates()
         .expect("Failed to calculate parallel state root with updates");
 
-    // =========================================================
     // Phase 4: Extend trie updates; flush to DB when batch full
     // (write lock held only for this brief section)
-    // =========================================================
     {
         let mut pool = BATCH_POOL.write();
         pool.trie_updates.extend(current_trie_updates);
@@ -324,9 +306,7 @@ pub fn execute_batch(block_height: i64, task_list: Vec<RwLock<Option<SimpleTask>
 
             let provider = factory.provider_rw().unwrap();
             provider.write_hashed_state(&sorted_state).expect("Failed to write hashed state");
-            // provider.write_trie_updates(&pool.trie_updates).expect("Failed to write trie updates");
-            let n = provider.write_trie_updates(&pool.trie_updates).expect("Failed to write trie updates");
-            println!("[DEBUG] block={} trie_nodes_written={}", block_height, n);
+            provider.write_trie_updates(&pool.trie_updates).expect("Failed to write trie updates");
             provider.commit().unwrap();
 
             // Reset pool for the next batch.

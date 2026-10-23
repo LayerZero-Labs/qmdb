@@ -60,7 +60,6 @@ pub fn read_kv(key_list: &[[u8; 20]]) {
     });
 }
 
-// ===========
 fn mdbx_create_kv(env: &mut Environment, task_list: &[RwLock<Option<SimpleTask>>]) {
     let txn = env.begin_rw_txn().unwrap();
     let db = txn.open_db(None).unwrap();

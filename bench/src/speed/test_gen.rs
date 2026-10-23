@@ -97,21 +97,15 @@ impl TestGenV2 {
 
     pub fn gen_block(&mut self) -> Vec<RwLock<Option<SimpleTask>>> {
         let blk_in_round = self.block_in_round();
-        // if self.block_count != 0 && self.block_count % blk_in_round == 0 {
         if self.block_count == blk_in_round {
             // First round is to populate the database, second round is to benchmark TPS.
             // Code does not currently support more than 2 rounds. TODO: Refactor this.
-            // println!(
-            //     "New round: {} -> {}, cur_num: {}, max_delete_num: {}, cur_delete_num: {}, cur_create_num: {}, cur_read_num: {}",
-            //     self.cur_round, self.cur_round+1, self.cur_num, self.max_delete_num, self.cur_delete_num, self.cur_create_num, self.cur_read_num
-            // );
             self.cur_round += 1;
             self.cur_num = 0;
             self.max_delete_num = self.cur_delete_num;
             self.cur_delete_num = 0;
             self.cur_read_num = 0;
         }
-        //println!("AA gen_block cur_round={} block_count={} sp={:?}", self.cur_round, self.block_count, self.sp);
         let mut res: Vec<RwLock<Option<SimpleTask>>> = Vec::with_capacity(self.task_in_block);
         for _ in 0..self.task_in_block {
             res.push(RwLock::new(None));
@@ -361,8 +355,6 @@ impl TestGenV2 {
                 };
             }
             let kh = self.fill_kv(num, &mut k[..], &mut v[..]);
-            //let k64 = BigEndian::read_u64(&kh[0..8]);
-            //println!("AA blkcnt={:#04x} r={:#04x} op={} cur_num={:#08x} num={:#08x} k64={:#016x} k={:?} kh={:?}", self.block_count, self.cur_round, op_type, self.cur_num, num, k64, k, kh);
             self.cur_num += 1;
 
             cset.add_op(op_type, &kh, &k[..], &v[..], None);

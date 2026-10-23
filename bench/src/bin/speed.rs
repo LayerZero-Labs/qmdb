@@ -6,7 +6,6 @@ use bench::{
 };
 
 use qmdb_common::def::{OP_CREATE, OP_DELETE, OP_READ, OP_WRITE};
-use qmdb_common::def::SHARD_COUNT;
 use qmdb_common::entryfile::entry::EntryBz;
 use qmdb_common::task::taskid::join_task_id;
 use qmdb_common::utils::changeset::ChangeSet;
@@ -16,24 +15,15 @@ use clap::Parser;
 use log::{info, warn};
 use parking_lot::RwLock;
 
-use byteorder::BigEndian;
-use byteorder::ByteOrder;
-
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use rayon::prelude::*;
-use std::ffi::CString;
-use std::fs::{self, File};
-use std::io::{self, Read, Write};
-use std::mem;
+use std::fs;
+use std::io;
 use std::panic;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, mpsc};
+use std::path::Path;
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
-use serde::{Deserialize, Serialize};
-use tokio::runtime::Runtime;
-
-use eth_replay_kv::{self, Operation, PREFETCH_BUFFER_BLOCKS};
 
 #[cfg(feature = "qmdb_bench_correctness")]
 use bench::speed::correctness::{build_key_and_expected_value, BitmapModel};
@@ -52,9 +42,6 @@ const N_TABLES: usize = 1;
 const PRIME1: u64 = 1299827; // Used for stride for hover_recreate_block
 
 use bench::speed::result_log;
-
-// TODO: 这个是否有用
-use qmdb_common::indexer::indexer_trait::IndexerTrait;
 
 struct RunConfig<'a> {
     table_id: usize,
@@ -94,11 +81,6 @@ struct HoverTaskConfig<'a> {
     /// and the sequential insert offset above entry_count.
     total_deleted_keys: &'a mut u64,
 
-    // IO Stat States
-    last_snapshot_time: &'a mut Instant,
-    last_user_bytes: &'a mut u64,
-    last_gc_bytes: &'a mut u64,
-
     #[cfg(feature = "qmdb_bench_correctness")]
     check_correctness: bool,
     #[cfg(feature = "qmdb_bench_correctness")]
@@ -124,11 +106,6 @@ struct HoverExecuteConfig<'a> {
     height: &'a mut i64,
     randsrc: &'a mut RandSrc,
     results: &'a mut BenchmarkResults,
-
-    // IO Stat States
-    last_snapshot_time: &'a mut Instant,
-    last_user_bytes: &'a mut u64,
-    last_gc_bytes: &'a mut u64,
 }
 
 struct SingleHoverBlockConfig<'a> {
@@ -167,7 +144,6 @@ fn main() {
         .build_global()
         .unwrap();
 
-    // ########### Initialize Database ###########
     // Make db_dir if it does not exist
     let is_eth_mode = args.eth_trace_dir.is_some() || args.init_db_path.is_some();
     std::fs::create_dir_all(args.db_dir.as_str()).unwrap();
@@ -183,7 +159,6 @@ fn main() {
     results.log_time("initialized");
     thread::sleep(Duration::from_secs(15));
 
-    // ########### Start Benchmark ###########
     if let Some(ref bundle_path) = args.init_db_path {
         // Real Ethereum workload, but Phase 1 loads a pre-computed InitDbBundle
         // (init_db + boundary_ops) instead of regenerating it from traces.
@@ -224,14 +199,7 @@ fn main() {
             &mut results
         );
     } else {
-        // -------------------------------------------------------------
-        // 1. QMDB 应用层 GC Monitor 初始化（当前未启用）
-        // -------------------------------------------------------------
-        // let _monitor_handle = spawn_qmdb_monitor(args.db_dir.clone());
-
-        // -------------------------------------------------------------
         // 2. 计算 block/task/changeset 等常量
-        // -------------------------------------------------------------
         // 一个 changeset ≈ 10 个操作（典型为 9 写 + 1 删）
         // 一个 task 包含 m 个 changeset
         // ops_per_block = tasks_per_block * changesets_per_task * ops_per_changeset
@@ -246,9 +214,7 @@ fn main() {
             panic!("tasks_per_block {tasks_per_block} is too large");
         }
 
-        // -------------------------------------------------------------
         // 3. 检查数据库大小是否合理
-        // -------------------------------------------------------------
         // entry_count 必须是 ops_per_block 的整数倍，否则无法按 block 生成
         if args.entry_count % args.ops_per_block != 0 {
             panic!(
@@ -262,9 +228,7 @@ fn main() {
 
         let mut initial_height: i64;
 
-        // -------------------------------------------------------------
         // 4. 根据是否从已有数据库启动，设置初始高度与工作量
-        // -------------------------------------------------------------
         if start_from_existing {
             println!("\n===============================================================");
             println!("!!! STARTING FROM AN EXISTING DB: Skipping Population Phase !!!");
@@ -331,9 +295,7 @@ fn main() {
             }
         }
 
-        // -------------------------------------------------------------
         // 5. 创建 TestGen（生成 workload）
-        // -------------------------------------------------------------
         let mut randsrc: RandSrc =
             RandSrc::new(args.randsrc_filename.as_str(), &format!("qmdb-{table_id}"));
         let mut test_gen_ = TestGenV2::new(
@@ -343,9 +305,7 @@ fn main() {
             tasks_per_block as usize,
         );
 
-        // -------------------------------------------------------------
         // 6. 正确性模型（仅在启用 qmdb_bench_correctness 时生效）
-        // -------------------------------------------------------------
         #[cfg(feature = "qmdb_bench_correctness")]
         let correctness_model = if args.check_correctness {
             let entry_count_wo_del = args.entry_count * 9 / 10;
@@ -356,9 +316,7 @@ fn main() {
         #[cfg(not(feature = "qmdb_bench_correctness"))]
         let correctness_model: Option<()> = None;
 
-        // -------------------------------------------------------------
         // 7. 运行 Benchmark
-        // -------------------------------------------------------------
         run(
             RunConfig {
                 table_id,
@@ -408,15 +366,8 @@ fn run(
     let mut last_print = Instant::now();
     let mut hover_time_since_last_print = Duration::from_secs(0);
 
-    // IO Stat Trackers
-    // TODO: 除了QMDB，其他是否有用到这个
-    let mut last_snapshot_time = Instant::now();
-    let mut last_user_bytes = 0u64;
-    let mut last_gc_bytes = 0u64;
     // Cumulative keys deleted across hover runs — drives delete stride_offset and insert num_offset.
     let mut total_deleted_keys: u64 = 0;
-
-    let REPORT_INTERVAL = 2;
 
     // 开始Population的Timestamp
     println!("Timestamp: {}", Utc::now().to_rfc3339());
@@ -474,10 +425,6 @@ fn run(
             vprintln!("PIPELINE_LOG: CLIENT_GENERATE_START height={} timestamp={}", height, Utc::now().to_rfc3339());
 
             results.update_entries_in_db((produced_blocks + 1) * test_gen.num_op_in_blk());
-            // Log IO Stat
-            if height % REPORT_INTERVAL == 0 {
-                log_io_stat(height, &mut last_snapshot_time, &mut last_user_bytes, &mut last_gc_bytes);
-            }
 
             // 记录Population数据
             // 1. Update the user interactively, time left, TPS -- based on time elapsed
@@ -532,9 +479,6 @@ fn run(
                     is_final,
                     results,
                     total_deleted_keys: &mut total_deleted_keys,
-                    last_snapshot_time: &mut last_snapshot_time,
-                    last_user_bytes: &mut last_user_bytes,
-                    last_gc_bytes: &mut last_gc_bytes,
                     #[cfg(feature = "qmdb_bench_correctness")]
                     check_correctness,
                     #[cfg(feature = "qmdb_bench_correctness")]
@@ -658,9 +602,6 @@ fn run(
             is_final: true,
             results,
             total_deleted_keys: &mut total_deleted_keys,
-            last_snapshot_time: &mut last_snapshot_time,
-            last_user_bytes: &mut last_user_bytes,
-            last_gc_bytes: &mut last_gc_bytes,
             #[cfg(feature = "qmdb_bench_correctness")]
             check_correctness,
             #[cfg(feature = "qmdb_bench_correctness")]
@@ -699,9 +640,6 @@ fn run_hover_tasks(config: HoverTaskConfig) {
         is_final,
         results,
         total_deleted_keys,
-        last_snapshot_time,
-        last_user_bytes,
-        last_gc_bytes,
         #[cfg(feature = "qmdb_bench_correctness")]
         check_correctness,
         #[cfg(feature = "qmdb_bench_correctness")]
@@ -733,9 +671,6 @@ fn run_hover_tasks(config: HoverTaskConfig) {
         height,
         randsrc,
         results,
-        last_snapshot_time,
-        last_user_bytes,
-        last_gc_bytes,
     });
 
     // --- READS ---
@@ -754,9 +689,6 @@ fn run_hover_tasks(config: HoverTaskConfig) {
         height,
         randsrc,
         results,
-        last_snapshot_time,
-        last_user_bytes,
-        last_gc_bytes,
     });
 
     // Insert/delete run ONLY on the final (post-population) hover. Mid-population
@@ -791,9 +723,6 @@ fn run_hover_tasks(config: HoverTaskConfig) {
             height,
             randsrc,
             results,
-            last_snapshot_time,
-            last_user_bytes,
-            last_gc_bytes,
         });
 
         // --- DELETES (PRIME1 stride, stride_offset advances each run to avoid cross-run double-deletion) ---
@@ -815,9 +744,6 @@ fn run_hover_tasks(config: HoverTaskConfig) {
             height,
             randsrc,
             results,
-            last_snapshot_time,
-            last_user_bytes,
-            last_gc_bytes,
         });
         *total_deleted_keys += n_hover_ops;
     } else {
@@ -839,14 +765,6 @@ fn run_hover_tasks(config: HoverTaskConfig) {
             run_hover_correctness_sampling(table_id, max_num, test_gen, model, randsrc, results);
         }
     }
-
-    //measure_read_latency(
-    //    table_id,
-    //    max_num,
-    //    randsrc,
-    //    results,
-    //    num_read_latency_samples,
-    //);
 
     let db_size_bytes = dir_size(Path::new(db_dir));
     let rss_kb = get_rss_kb();
@@ -873,9 +791,6 @@ fn hover_execute_op(config: HoverExecuteConfig) {
         height,
         randsrc,
         results,
-        last_snapshot_time,
-        last_user_bytes,
-        last_gc_bytes,
     } = config;
 
     // Build Zipf sampler once for the entire operation (avoids re-init per block).
@@ -1023,9 +938,6 @@ fn hover_execute_op(config: HoverExecuteConfig) {
 
         if i % 10 == 5 {
             println!("hover {operation_name} {i} (partial)");
-        }
-        if i % 2 == 0 {
-            log_io_stat(*height, last_snapshot_time, last_user_bytes, last_gc_bytes);
         }
     }
     drop(tx); 
@@ -1215,9 +1127,7 @@ fn run_eth_replay_mode(
 
     let mut global_db_height: i64 = 1;
 
-    // =========================================================
     // Phase 1: 将KV文件中的内容读取到内存，生成init db内存版本
-    // =========================================================
     println!("\n=== Phase 1: Populating Base State ===");
     
     let (tx_p1, mut rx_p1) = tokio::sync::mpsc::channel(eth_replay_kv::PREFETCH_BUFFER_BLOCKS);
@@ -1246,9 +1156,7 @@ fn run_eth_replay_mode(
     let (init_db, boundary_ops) = splitter.into_parts();
     println!("init_db size: {}, boundary blocks: {}", init_db.len(), boundary_ops.len());
 
-    // =========================================================
     // Phase 2: 将init db内存版本populate到DB
-    // =========================================================
     let mut total_init_entries = 0;
     let ops_per_block = 100000;
     let ops_per_cset = 10;
@@ -1342,17 +1250,13 @@ fn run_eth_replay_mode(
     std::thread::sleep(Duration::from_secs(60));
     println!("Base State Population Complete.");
 
-    // =========================================================
     // Phase 3: Replaying Operations (Benchmark) - 官方模式适配
-    // =========================================================
     println!("\n=== Phase 2: Replaying Operations (Benchmark) ===");
     
     // === PRE-LOAD all replay ops into RAM before benchmark timer starts ===
     // Goal: Phase 3 main loop is bottlenecked by DB engine, not by SSD trace I/O.
-    let rss_before_preload_kb = get_rss_kb();
     println!("
 === Pre-loading replay ops [{}, {}] into RAM ===", replay_start, replay_end);
-    println!("  VmRSS before pre-load: {:.2} GB", rss_before_preload_kb as f64 / 1024.0 / 1024.0);
     let preload_start = Instant::now();
     let mut replay_blocks: Vec<(u64, Option<Vec<eth_replay_kv::Operation>>)> = Vec::new();
     {
@@ -1370,17 +1274,7 @@ fn run_eth_replay_mode(
         });
     }
     let preload_dur = preload_start.elapsed();
-    let est_ops_bytes: usize = replay_blocks.iter().map(|(_, v)| v.as_ref().map_or(0, |ops| ops.iter().map(|op| match op {
-        eth_replay_kv::Operation::Create(k, val) | eth_replay_kv::Operation::Update(k, val) | eth_replay_kv::Operation::Read(k, val) => k.len() + val.len() + 24,
-        eth_replay_kv::Operation::Delete(k) => k.len() + 24,
-    }).sum::<usize>())).sum();
-    let rss_after_preload_kb = get_rss_kb();
-    let preload_delta_kb = rss_after_preload_kb.saturating_sub(rss_before_preload_kb);
     println!("Pre-loaded {} blocks in {:?}", replay_blocks.len(), preload_dur);
-    println!("  Estimated ops payload: {:.2} GB", est_ops_bytes as f64 / 1024.0 / 1024.0 / 1024.0);
-    println!("  Actual VmRSS after pre-load: {:.2} GB (delta {:.2} GB)", 
-        rss_after_preload_kb as f64 / 1024.0 / 1024.0,
-        preload_delta_kb as f64 / 1024.0 / 1024.0);
 
     // Drop OS page cache so Phase 3 SSD I/O reflects DB engine only.
     println!("Dropping OS page cache after pre-load...");
@@ -1677,9 +1571,7 @@ fn run_eth_replay_inner(
 
     let mut global_db_height: i64 = 1;
 
-    // =========================================================
     // Phase 1: produce (init_db, boundary_ops) — either from bundle or from trace
-    // =========================================================
     let mut src: InitDbSource = if let Some(bp) = bundle_path {
         println!("\n=== Phase 1: Streaming InitDbBundle from {} ===", bp);
         let t0 = std::time::Instant::now();
@@ -1724,10 +1616,8 @@ fn run_eth_replay_inner(
         InitDbSource::Mem { iter: Box::new(hm.into_iter()), boundary: bops }
     };
 
-    // =========================================================
     // Phase 2: 将init db内存版本populate到DB (streaming: pull one entry at a time
     // via src.next_entry() so the full init_db Vec is never held in memory)
-    // =========================================================
     let mut total_init_entries = 0;
     let ops_per_block = 100000;
     let ops_per_cset = 10;
@@ -1832,17 +1722,13 @@ fn run_eth_replay_inner(
     println!("boundary_ops in replay range [{}, {}]: {} blocks retained",
         replay_start, replay_end, boundary_ops.len());
 
-    // =========================================================
     // Phase 3: Replaying Operations (Benchmark) - 官方模式适配
-    // =========================================================
     println!("\n=== Phase 2: Replaying Operations (Benchmark) ===");
     
     // === STREAMING mode: 50-block bounded channel ===
     // Memory bounded ~25 MB (50 blocks × ~0.5 MB), supports arbitrary replay range.
     // Producer runs ahead in background, main loop drains from channel.
-    let rss_before_stream_kb = get_rss_kb();
     println!("\n=== Streaming replay ops [{}, {}] (queue=50 blocks) ===", replay_start, replay_end);
-    println!("  VmRSS before streaming: {:.2} GB", rss_before_stream_kb as f64 / 1024.0 / 1024.0);
     let source_stream = source.clone().expect("eth-trace-dir is required for Phase 3 replay");
     let (tx_stream, mut rx_stream) = tokio::sync::mpsc::channel(50);
     let source_pre = source_stream.clone();
@@ -2028,9 +1914,6 @@ fn run_eth_replay_inner(
     results.record_throughput_as_total("eth_replay_ops", total_ops, total_duration);
 }
 
-// ####################################################################
-// ############################## Tools ###############################
-// ####################################################################
 fn rand_between_seg_idx(
     randsrc: &mut RandSrc,
     min: usize,
@@ -2134,96 +2017,6 @@ fn print_unified_report(
     result_log::write_line(&format!("  > OS Physical Read  = {} bytes ({:.2} MB)", os_read_bytes, os_read_bytes as f64 / 1024.0 / 1024.0));
     result_log::write_line("----------------------------------------------------------------");
 }
-
-pub fn log_io_stat(
-    _height: i64, _last_snapshot_time: &mut Instant,
-    _last_user_bytes: &mut u64, _last_gc_bytes: &mut u64,
-) {
-    //
-}
-
-
-#[cfg(all(not(feature="use_mdbx"), not(feature="use_rocksdb"), not(feature="use_reth"), not(feature="use_nomt"), not(feature="use_lvmt")))]
-fn spawn_qmdb_monitor(db_dir: String) {
-    let table_id_for_monitor = 0; 
-    thread::spawn(move || {
-        loop {
-            if let Some((metadb_arc, indexer_arc)) = db_backend::get_db_handles(table_id_for_monitor) {
-                let metadb = metadb_arc.read(); 
-                let mut total_garbage_entries: u64 = 0;
-                let mut total_active_entries: u64 = 0;
-                let mut total_on_disk_entries: u64 = 0;
-                let mut total_disk_size_bytes: u64 = 0;
-                let mut estimated_garbage_size_bytes: f64 = 0.0;
-
-                for shard_id in 0..SHARD_COUNT {
-                    let sn_start = metadb.get_oldest_active_sn(shard_id);
-                    let sn_end = metadb.get_next_serial_num(shard_id);
-                    let active_entries = indexer_arc.len(shard_id) as u64;
-                    let file_size = metadb.get_entry_file_size(shard_id);
-
-                    let shard_total_entries = if sn_end > sn_start { sn_end - sn_start } else { 0 };
-                    let shard_garbage_entries = if shard_total_entries > active_entries { shard_total_entries - active_entries } else { 0 };
-                    
-                    let garbage_ratio = if shard_total_entries > 0 {
-                        shard_garbage_entries as f64 / shard_total_entries as f64
-                    } else {
-                        0.0
-                    };
-
-                    total_garbage_entries += shard_garbage_entries;
-                    total_active_entries += active_entries;
-                    total_on_disk_entries += shard_total_entries;
-                    total_disk_size_bytes += file_size as u64;
-                    estimated_garbage_size_bytes += (file_size as f64) * garbage_ratio;
-                }
-                drop(metadb); 
-
-                // ===== 获取物理磁盘真实使用量 =====
-                let mut physical_used_bytes: u64 = 0;
-                let mut physical_total_bytes: u64 = 0;
-
-                unsafe {
-                    let path = CString::new(db_dir.as_str()).unwrap_or_default();
-                    let mut stats: libc::statvfs = mem::zeroed();
-                    if libc::statvfs(path.as_ptr(), &mut stats) == 0 {
-                        let block_size = stats.f_frsize as u64;
-                        let total_blocks = stats.f_blocks as u64;
-                        let free_blocks = stats.f_bfree as u64;
-                        physical_total_bytes = total_blocks * block_size;
-                        physical_used_bytes = (total_blocks - free_blocks) * block_size;
-                    } else {
-                        warn!("Failed to get disk stats for {}", db_dir);
-                    }
-                }
-
-                // println!(
-                //     "GC_SNAPSHOT: Timestamp={} TotalEntries(Disk)={} ActiveEntries(Mem)={} GarbageEntries={} TotalDiskSizeMB={:.2} EstGarbageSizeMB={:.2} PhysicalDiskUsedMB={:.2} PhysicalDiskTotalMB={:.2}",
-                //     Utc::now().to_rfc3339(),
-                //     total_on_disk_entries,
-                //     total_active_entries,
-                //     total_garbage_entries,
-                //     total_disk_size_bytes as f64 / (1024.0 * 1024.0),
-                //     estimated_garbage_size_bytes / (1024.0 * 1024.0),
-                //     physical_used_bytes as f64 / (1024.0 * 1024.0),
-                //     physical_total_bytes as f64 / (1024.0 * 1024.0)
-                // );
-            } else {
-                // println!("GC_SNAPSHOT: 等待数据库句柄...");
-            }
-            thread::sleep(Duration::from_secs(5));
-        }
-    });
-}
-
-#[cfg(any(feature="use_mdbx", feature="use_rocksdb", feature="use_reth", feature="use_nomt", feature="use_lvmt"))]
-fn spawn_qmdb_monitor(_: String) {
-    // 其他数据库不需要此监控，函数体留空
-}
-
-// ####################################################################
-// ########################## 暂时未使用的code ##########################
-// ####################################################################
 
 /// Perform lightweight correctness sampling during hover reads.
 ///
@@ -2410,165 +2203,3 @@ fn run_hover_correctness_sampling(
             .or_insert(mismatches as f64);
     }
 }
-
-#[allow(dead_code)]
-#[inline]
-fn generate_read_key(randsrc: &mut RandSrc, max_num: u64) -> [u8; 20] {
-    let num = rand_between(randsrc, 0, max_num as usize);
-    let mut k = [0u8; 20];
-    BigEndian::write_u64(&mut k[12..20], num as u64);
-    let hash = qmdb_common::entryfile::entry::entry_key_hash(&k[12..20]);
-    for i in 0..12 {
-        k[i] = hash[i] ^ hash[12 + i];
-    }
-    k
-}
-
-// fn do_hover_read(
-//     table_id: usize,
-//     _hover_read_count: u64,
-//     max_num: u64,
-//     randsrc: &mut RandSrc,
-//     results: &mut BenchmarkResults,
-//     _read_batch: u64,
-//     num_read_latency_samples: u64,
-// ) {
-//     db_backend::flush(table_id);
-
-//     // Benchmark read throughput
-//     let bm_start = Instant::now();
-//     let mut key_list = Vec::with_capacity(read_batch as usize);
-
-//     for i in 0..hover_read_count {
-//         thread::scope(|s| {
-//             // First: Add the new key to the list
-//             key_list.push(generate_read_key(randsrc, max_num));
-
-//             // Then: Process the batch if we've hit the batch size or it's the last iteration
-//             if i % read_batch == read_batch - 1 || i == hover_read_count - 1 {
-//                 let mut list = Vec::with_capacity(read_batch as usize);
-//                 std::mem::swap(&mut list, &mut key_list);
-//                 if i != hover_read_count - 1 {
-//                     println!("\tBenchmarking reads {}", i + 1);
-//                 }
-//                 s.spawn(move || db_backend::read_kv(table_id, &list));
-//             }
-//         });
-//     }
-
-//     results.record_throughput("reads", hover_read_count, bm_start.elapsed());
-// }
-
-// fn measure_read_latency(
-//     table_id: usize,
-//     max_num: u64,
-//     randsrc: &mut RandSrc,
-//     results: &mut BenchmarkResults,
-//     num_read_latency_samples: u64,
-// ) {
-//     db_backend::flush(table_id);
-//     print!("Benchmarking read latency...");
-//     let latency = results.latencies.get_mut("reads").unwrap();
-//     for _ in 0..num_read_latency_samples {
-//         let k = generate_read_key(randsrc, max_num);
-//         let start = Instant::now();
-//         db_backend::read_kv(table_id, &vec![k]);
-//         let duration = start.elapsed();
-//         latency.record(duration);
-//     }
-
-//     if let Some(stats) = latency.detailed_stats() {
-//         stats.print("Read", true);
-//     }
-// }
-
-// // 核心执行逻辑：按顺序解析 Operation，统一打包成 ChangeSet 交给 update_kv
-// fn apply_operations(
-//     table_id: usize, 
-//     height: u64, 
-//     ops: Vec<eth_replay_kv::Operation>, 
-//     boundary_ops: Option<&Vec<eth_replay_kv::Operation>>
-// ) -> u64 {
-//     let mut total_ops_count = ops.len() as u64;
-//     if let Some(b_ops) = boundary_ops {
-//         total_ops_count += b_ops.len() as u64;
-//     }
-
-//     if total_ops_count == 0 { return 0; }
-
-//     let mut final_change_sets = Vec::new();
-//     let mut current_cset = ChangeSet::new();
-//     let mut current_batch_keys: HashSet<Vec<u8>> = HashSet::new();
-
-//     // 内部闭包：处理单个 Operation，将其转化为底层 op_code
-//     let mut process_op = |op: &eth_replay_kv::Operation| {
-//         let (op_code, key_ref, val_ref) = match op {
-//             eth_replay_kv::Operation::Create(k, v) => (OP_CREATE, k, Some(v)),
-//             eth_replay_kv::Operation::Update(k, v) => (OP_WRITE, k, Some(v)),
-//             eth_replay_kv::Operation::Delete(k)    => (OP_DELETE, k, None),
-//             eth_replay_kv::Operation::Read(k, v)   => (OP_READ, k, Some(v)), 
-//         };
-
-//         // 如果遇到同一个区块中对同一个 Key 操作多次，触发分片换一个新的 ChangeSet
-//         if current_batch_keys.contains(key_ref) {
-//             current_cset.sort();
-            
-//             // 【修复关键点】：使用 std::mem::replace 替换值，避免 Move 所有权
-//             let completed_cset = std::mem::replace(&mut current_cset, ChangeSet::new());
-//             final_change_sets.push(completed_cset);
-            
-//             current_batch_keys.clear();
-//         }
-
-//         let kh = qmdb_common::entryfile::entry::entry_key_hash(key_ref);
-//         let val_slice = val_ref.map(|v| v.as_slice()).unwrap_or(&[]);
-        
-//         current_cset.add_op(op_code, &kh, key_ref, val_slice, None);
-//         current_batch_keys.insert(key_ref.clone());
-//     };
-
-//     // 1. 严格按照顺序，先处理本区块由于状态缺失产生的 boundary_ops
-//     if let Some(b_ops) = boundary_ops {
-//         for op in b_ops {
-//             process_op(op);
-//         }
-//     }
-
-//     // 2. 然后再处理真实的交易链路 ops
-//     for op in &ops {
-//         process_op(op);
-//     }
-
-//     // NLL（非词法作用域生命周期）会在这里自动结束 process_op 对变量的借用，
-//     // 所以下面再次使用 current_cset 完全合法。
-
-//     if !current_cset.op_list.is_empty() {
-//         current_cset.sort();
-//         final_change_sets.push(current_cset);
-//     }
-
-//     // // 3. 将包含读写的混合区块直接发送给 update_kv 接口
-//     // if !final_change_sets.is_empty() {
-//     //     let task = SimpleTask {
-//     //         change_sets: Arc::new(final_change_sets),
-//     //     };
-//     //     db_backend::update_kv(table_id, height as i64, vec![parking_lot::RwLock::new(Some(task))]);
-//     // }
-//     if !final_change_sets.is_empty() {
-//         let mut tasks = Vec::new();
-//         // 如果想充分利用核心，切分粒度可以自己调，这里以每 10 个 changeset 为一个 Task 举例
-//         let chunk_size = std::cmp::max(1, final_change_sets.len() / 16); 
-        
-//         for chunk in final_change_sets.chunks(chunk_size) {
-//             let task = SimpleTask {
-//                 change_sets: Arc::new(chunk.to_vec()),
-//             };
-//             tasks.push(parking_lot::RwLock::new(Some(task)));
-//         }
-
-//         // 把拆分后（长度 > 1）的 tasks 数组发给底层，Rayon 就可以发力了！
-//         db_backend::update_kv(table_id, height as i64, tasks);
-//     }
-
-//     total_ops_count
-// }
