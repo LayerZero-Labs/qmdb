@@ -18,6 +18,7 @@ swap them before `cargo build`.
 | `Cargo.toml.lvmt` | default | active | commented out |
 | `Cargo.toml.reth` | reth | commented out | active |
 | `Cargo.toml` | live (overwritten by switch) | — | — |
+| `Cargo.lock.lvmt`, `Cargo.lock.reth` | lock file of each mode, copied to the workspace `Cargo.lock` by the switch | — | — |
 | `switch_backend.sh` | toggle | — | — |
 
 ## Usage
