@@ -42,6 +42,14 @@ const MAX_WAIT: usize = 32;
 /// Maximum registered files: 16 shards × 256 segments = 4096
 const MAX_REGISTERED_FILES: u32 = 16 * 256;
 
+/// Number of SSD reads submitted to io_uring so far. The benchmark polls it to time a
+/// Read phase until the prefetcher has issued its last read.
+pub static DIO_READ_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn dio_read_count() -> u64 {
+    DIO_READ_COUNT.load(Ordering::Relaxed)
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct PruneCmd {
     pub shard_id: usize,
@@ -1084,6 +1092,7 @@ impl JobManager {
                 let read_e = Self::build_read_entry(raw_fd, fixed_slot, offset, buf, id);
                 sub_id_vec[id as usize] = (sj.sub_id, job_slot);
                 unsafe { sq.push(&read_e).unwrap() };
+                DIO_READ_COUNT.fetch_add(1, Ordering::Relaxed);
                 pushed_any = true;
                 in_flight += 1;
             }

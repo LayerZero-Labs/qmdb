@@ -85,6 +85,9 @@ struct HoverExecuteConfig<'a> {
     height: &'a mut i64,
     randsrc: &'a mut RandSrc,
     results: &'a mut BenchmarkResults,
+    /// Mixed read/write hover: Some(r) => each op is a READ with probability r, else a
+    /// WRITE (update of an existing key). None = a single-op phase.
+    read_ratio: Option<f64>,
 }
 
 struct SingleHoverBlockConfig<'a> {
@@ -93,6 +96,8 @@ struct SingleHoverBlockConfig<'a> {
     test_gen: &'a mut TestGenV2,
     height: &'a mut i64,
     op_type: u8,
+    /// Mixed read/write: Some(r) => per-op READ with probability r, else WRITE.
+    read_ratio: Option<f64>,
     start_num: u64,
     stride: u64,
     max_num: u64,
@@ -584,10 +589,17 @@ fn run_hover_tasks(config: HoverTaskConfig) {
         test_gen.sp.entry_count
     };
 
+    // When HOVER_RW_RATIOS is set (mixed read/write sweep), skip the standard
+    // insert/delete phases so the ratio hover runs on a clean post-populate key
+    // space (each ratio point is its own fresh populate + single mixed hover).
+    let rw_sweep_active = is_final
+        && std::env::var("HOVER_RW_RATIOS").map(|s| !s.trim().is_empty()).unwrap_or(false);
+
     // --- UPDATES (write) ---
     hover_execute_op(HoverExecuteConfig {
         table_id,
         operation_name: "updates",
+        read_ratio: None,
         op_type: OP_WRITE,
         block_count: hover_write_block,
         op_in_blk,
@@ -606,6 +618,7 @@ fn run_hover_tasks(config: HoverTaskConfig) {
     hover_execute_op(HoverExecuteConfig {
         table_id,
         operation_name: "reads",
+        read_ratio: None,
         op_type: OP_READ,
         block_count: hover_write_block,
         op_in_blk,
@@ -623,7 +636,9 @@ fn run_hover_tasks(config: HoverTaskConfig) {
     // Insert/delete run ONLY on the final (post-population) hover. Mid-population
     // hovers run read/write only — inserting/deleting before population completes
     // corrupts entry bookkeeping and can crash on deleted-key lookups.
-    if !is_final {
+    if rw_sweep_active {
+        println!("rw-sweep active: skipping standard insert/delete phases");
+    } else if !is_final {
         println!("Mid-population hover: read/write only (insert/delete deferred to final hover)");
     } else if zipf_theta != 0.0 {
         println!("Skipping delete and insert benchmarks (zipf_theta={zipf_theta} != 0)");
@@ -640,6 +655,7 @@ fn run_hover_tasks(config: HoverTaskConfig) {
         hover_execute_op(HoverExecuteConfig {
             table_id,
             operation_name: "inserts",
+            read_ratio: None,
             op_type: OP_CREATE,
             block_count: hover_recreate_block,
             op_in_blk,
@@ -661,6 +677,7 @@ fn run_hover_tasks(config: HoverTaskConfig) {
         hover_execute_op(HoverExecuteConfig {
             table_id,
             operation_name: "deletes",
+            read_ratio: None,
             op_type: OP_DELETE,
             block_count: hover_recreate_block,
             op_in_blk,
@@ -677,6 +694,47 @@ fn run_hover_tasks(config: HoverTaskConfig) {
         *total_deleted_keys += n_hover_ops;
     } else {
         println!("skip hover delete and insert blocks (db too small)");
+    }
+
+    // ---- Mixed read/write ratio sweep (env HOVER_RW_RATIOS="0.0,0.1,...,1.0") ----
+    // Runs only on the final (full-DB) hover. For each ratio r, every op in the block
+    // is a READ with probability r, else a WRITE (update of an existing key). The block
+    // is submitted via update_kv (commits + executes mixed changesets, exactly like ETH
+    // replay), so a single mixed block measures true mixed read/write throughput.
+    // Pure read/write only — no insert/delete. Reuses the already-populated DB.
+    if is_final {
+        if let Ok(spec) = std::env::var("HOVER_RW_RATIOS") {
+            println!("=== Mixed read/write ratio sweep: HOVER_RW_RATIOS={spec} ===");
+            for tok in spec.split(',') {
+                let tok = tok.trim();
+                if tok.is_empty() { continue; }
+                let r: f64 = match tok.parse() {
+                    Ok(v) if (0.0..=1.0).contains(&v) => v,
+                    _ => { println!("  skip invalid ratio '{tok}'"); continue; }
+                };
+                // metric name e.g. rw_read00 (all write) .. rw_read10 (all read)
+                let name: &'static str =
+                    Box::leak(format!("rw_read{:02}", (r * 10.0).round() as u32).into_boxed_str());
+                println!("--- mixed hover: read_ratio={r} ({name}) ---");
+                hover_execute_op(HoverExecuteConfig {
+                    table_id,
+                    operation_name: name,
+                    read_ratio: Some(r),
+                    op_type: OP_WRITE,        // => update_kv submit path (commit + mixed ok)
+                    block_count: hover_write_block,
+                    op_in_blk,
+                    stride: u64::MAX,          // uniform random keys over the stable range
+                    max_num,
+                    num_offset: 0,
+                    stride_offset: 0,
+                    zipf_theta: 0.0,
+                    test_generator: test_gen,
+                    height,
+                    randsrc,
+                    results,
+                });
+            }
+        }
     }
 
     let db_size_bytes = dir_size(Path::new(db_dir));
@@ -704,6 +762,7 @@ fn hover_execute_op(config: HoverExecuteConfig) {
         height,
         randsrc,
         results,
+        read_ratio,
     } = config;
 
     // Build Zipf sampler once for the entire operation (avoids re-init per block).
@@ -835,6 +894,7 @@ fn hover_execute_op(config: HoverExecuteConfig) {
             test_gen: test_generator,
             height: &mut current_height,
             op_type,
+            read_ratio,
             start_num: start,
             stride,
             max_num,
@@ -857,7 +917,31 @@ fn hover_execute_op(config: HoverExecuteConfig) {
     // bench timer stop ~2 blocks before engine completion, causing ~2-9% over-
     // measurement of throughput.
     db_backend::flush(table_id);
-    results.record_throughput(operation_name, block_count * op_in_blk, bm_start.elapsed());
+    #[allow(unused_mut)]
+    let mut phase_dur = bm_start.elapsed();
+    // QMDB: the updater treats OP_READ as a no-op, so flush() returns while the io_uring
+    // prefetcher still has outstanding disk reads (~16% of a read phase). Wait for those to
+    // drain — poll DIO_READ_COUNT until it plateaus — so the timer reflects the true read
+    // completion time (SSD-bound), not the no-op updater's finish. This is a one-time
+    // end-of-phase poll; for write phases the counter has already plateaued at flush.
+    #[cfg(all(not(feature = "use_nomt"), not(feature = "use_reth"), not(feature = "use_lvmt")))]
+    {
+        let mut last = qmdb::prefetcher::dioprefetcher::dio_read_count();
+        let mut last_change = Instant::now();
+        loop {
+            std::thread::sleep(Duration::from_millis(2));
+            let now = qmdb::prefetcher::dioprefetcher::dio_read_count();
+            if now != last {
+                last = now;
+                last_change = Instant::now();
+            } else if last_change.elapsed() >= Duration::from_millis(40) {
+                break; // no new SSD read for 40ms => prefetcher drained
+            }
+        }
+        // last_change marks the last real read; the 40ms plateau wait is excluded.
+        phase_dur = last_change.duration_since(bm_start);
+    }
+    results.record_throughput(operation_name, block_count * op_in_blk, phase_dur);
 
     // 3. 输出当前的磁盘信息
     println!("Timestamp (End): {}", Utc::now().to_rfc3339());
@@ -876,6 +960,7 @@ fn run_single_hover_block(config: SingleHoverBlockConfig) -> Vec<RwLock<Option<S
         test_gen,
         height,
         op_type,
+        read_ratio,
         mut start_num,
         stride,
         max_num,
@@ -991,12 +1076,24 @@ fn run_single_hover_block(config: SingleHoverBlockConfig) -> Vec<RwLock<Option<S
                     not(feature = "use_reth"),
                     not(feature = "use_lvmt")
                 ));
-                if op_type == OP_READ && _i == 0 && is_qmdb {
+                let actual_op = if let Some(ratio) = read_ratio {
+                    // Mixed read/write sweep. Force the very first op of the block to
+                    // WRITE (QMDB needs >=1 write per block to advance block id); every
+                    // other op is READ with probability `ratio`, else WRITE (update).
+                    if is_qmdb && _i == 0 && i == 0 && j == 0 {
+                        OP_WRITE
+                    } else if (randsrc.get_uint32() as f64) < ratio * (u32::MAX as f64) {
+                        OP_READ
+                    } else {
+                        OP_WRITE
+                    }
+                } else if op_type == OP_READ && _i == 0 && is_qmdb {
                     // 只有 QMDB 才强行塞一个 Write 进去
-                    cset.add_op(OP_WRITE, &kh, &k[..], &v[..], None);
+                    OP_WRITE
                 } else {
-                    cset.add_op(op_type, &kh, &k[..], &v[..], None);
-                }
+                    op_type
+                };
+                cset.add_op(actual_op, &kh, &k[..], &v[..], None);
             }
             cset.sort();
             cset_list.push(cset);

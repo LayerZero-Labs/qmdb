@@ -436,18 +436,21 @@ impl BenchmarkResults {
     }
 
     pub fn record_throughput(&mut self, operation_name: &str, count: u64, duration: Duration) {
-        if let Some(record) = self.tputs.get_mut(operation_name) {
-            let update = record.record(count, duration, self.entries_in_db);
-            let line = format!(
-                "{}@{} entries: {}, total: {}",
-                operation_name, self.entries_in_db, update, record
-            );
-            // Populate progress -> stdout; hover-phase results -> metrics log.
-            if operation_name == "block_population" || operation_name == "fresh_inserts" {
-                println!("{line}");
-            } else {
-                result_log::write_line(&line);
-            }
+        // Register phase names that are not predefined (the rw_read* mixed read/write sweep).
+        let record = self
+            .tputs
+            .entry(operation_name.to_string())
+            .or_insert_with(Throughput::new);
+        let update = record.record(count, duration, self.entries_in_db);
+        let line = format!(
+            "{}@{} entries: {}, total: {}",
+            operation_name, self.entries_in_db, update, record
+        );
+        // Populate progress -> stdout; hover-phase results -> metrics log.
+        if operation_name == "block_population" || operation_name == "fresh_inserts" {
+            println!("{line}");
+        } else {
+            result_log::write_line(&line);
         }
     }
 

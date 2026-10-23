@@ -42,6 +42,11 @@ cfg_if! {
                 pub shard_id: usize,
                 pub seg_id: usize,
             }
+
+            /// No io_uring reads without the DIO prefetcher.
+            pub fn dio_read_count() -> u64 {
+                0
+            }
         }
     }
 }

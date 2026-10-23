@@ -62,5 +62,6 @@ check_hybridindexer = []
 profiling_hybridindexer = []
 tee_cipher = []
 with_tokio = ["tokio"]
+pipeline_off = []
 
 

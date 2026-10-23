@@ -1228,7 +1228,13 @@ impl<T: Task + 'static> AdsWrap<T> {
         self.cache = cache;
 
         let mut meta_info = Option::None;
-        if self.task_hub.free_slot_count() == 0 {
+        // pipeline_off: wait until every in-flight block has finished (both slots free),
+        // so consecutive blocks never overlap (pipeline depth 1 instead of 2).
+        #[cfg(feature = "pipeline_off")]
+        let need_free: usize = 2;
+        #[cfg(not(feature = "pipeline_off"))]
+        let need_free: usize = 1;
+        while self.task_hub.free_slot_count() < need_free {
             // adscore and task_hub are busy, wait for them to finish an old block
             let _meta_info = self.end_block_chan.recv().unwrap();
             self.task_hub.end_block(_meta_info.curr_height);
