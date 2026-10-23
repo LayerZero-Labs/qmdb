@@ -1,7 +1,6 @@
 use clap::{Args, Parser};
-use serde::Serialize;
 
-#[derive(Parser, Serialize, Debug, Clone)]
+#[derive(Parser, Debug, Clone)]
 pub struct Cli {
     /// Number of entries to populate database with
     #[arg(short, long, default_value_t = 500_000_000)]
@@ -14,16 +13,6 @@ pub struct Cli {
     /// Source of randomness for workload generation  
     #[arg(short, long, default_value = "./randsrc.dat")]
     pub randsrc_filename: String,
-
-    /// Output file for benchmark results
-    #[arg(short, long, default_value = "results.json")]
-    pub output_filename: String,
-
-    /// Append KEY result metrics (per-phase throughput, OS physical R/W,
-    /// MEM/SSD/CPU summary, final summary) to this file instead of stdout.
-    /// Empty = print to stdout.
-    #[arg(long, default_value = "")]
-    pub result_log: String,
 
     /// Block device name (as in /proc/diskstats) for OS physical R/W counters.
     /// Empty = auto-derive from --db-dir's mount via findmnt (recommended).
@@ -77,7 +66,7 @@ pub struct Cli {
     pub eth_replay_end_height: u64,
 }
 
-#[derive(Args, Debug, Serialize, Clone)]
+#[derive(Args, Debug, Clone)]
 pub struct HoverWorkloadArgs {
     // TODO: Make this a function of entries rather than by block
     /// Interval between hover tasks (dev=10, test=1000)
@@ -91,10 +80,6 @@ pub struct HoverWorkloadArgs {
     /// Number of blocks? to write in hover tasks (dev=2, test=50)
     #[arg(long, default_value_t = if cfg!(debug_assertions) { 2 } else { 50 })]
     pub hover_write_block: u64,
-
-    /// Number of read latency samples to collect
-    #[arg(long, default_value_t = 100000)]
-    pub num_read_latency_samples: u64,
 
     /// Zipf exponent for read/write hover workload key selection.
     /// 0.0 = uniform random (default), 0.99 = YCSB-style skew, >1.0 = extreme skew.

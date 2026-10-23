@@ -1,10 +1,9 @@
 pub mod db_backend;
+pub mod disk_monitor;
 pub mod zipf;
 pub mod def;
 pub mod hover_gen;
-pub mod metrics;
 pub mod qmdb;
-pub mod result_log;
 pub mod results;
 pub mod shuffle_param;
 pub mod streaming_gen;

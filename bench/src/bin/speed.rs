@@ -28,7 +28,7 @@ use std::time::{Duration, Instant};
 const N_TABLES: usize = 1;
 const PRIME1: u64 = 1299827; // Used for stride for hover_recreate_block
 
-use bench::speed::result_log;
+use bench::speed::disk_monitor;
 
 struct RunConfig<'a> {
     table_id: usize,
@@ -41,7 +41,6 @@ struct RunConfig<'a> {
     hover_write_block: u64,
     /// Zipf exponent for read/write key selection. 0.0 = uniform.
     zipf_theta: f64,
-    output_filename: &'a str,
 }
 
 struct HoverTaskConfig<'a> {
@@ -124,16 +123,13 @@ fn main() {
     // Make db_dir if it does not exist
     let is_eth_mode = args.eth_trace_dir.is_some() || args.init_db_path.is_some();
     std::fs::create_dir_all(args.db_dir.as_str()).unwrap();
-    // Initialize the metrics-log sink and resolve the OS-physical-R/W disk from
-    // db_dir (single source: one --db-dir drives DB path + I/O counters).
-    result_log::init_result_log(&args.result_log);
-    result_log::init_monitor_disk(&args.monitor_disk, args.db_dir.as_str());
+    // Resolve the OS-physical-R/W disk from db_dir (single source: one --db-dir
+    // drives DB path + I/O counters).
+    disk_monitor::init_monitor_disk(&args.monitor_disk, args.db_dir.as_str());
     for i in 0..N_TABLES {
         db_backend::init(args.db_dir.as_str(), i, start_from_existing, is_eth_mode, args.entry_count);
     }
     println!("Using database backend: {}", db_backend::NAME);
-    results.db_backend = db_backend::NAME.to_string();
-    results.log_time("initialized");
     thread::sleep(Duration::from_secs(15));
 
     if let Some(ref bundle_path) = args.init_db_path {
@@ -154,7 +150,6 @@ fn main() {
             trace_dir,
             replay_start,
             replay_end,
-            &mut results,
         );
     } else if let Some(ref path) = args.eth_trace_dir {
         println!(
@@ -173,7 +168,6 @@ fn main() {
             args.eth_end_height,
             replay_start,
             replay_end,
-            &mut results
         );
     } else {
         // 2. 计算 block/task/changeset 等常量
@@ -294,7 +288,6 @@ fn main() {
                 hover_recreate_block: args.hover.hover_recreate_block,
                 hover_write_block: args.hover.hover_write_block,
                 zipf_theta: args.hover.hover_zipf_theta,
-                output_filename: args.output_filename.as_str(),
             },
             initial_height,
         );
@@ -315,7 +308,6 @@ fn run(
         hover_recreate_block,
         hover_write_block,
         zipf_theta,
-        output_filename,
     } = config;
 
     let blk_in_round = test_gen.block_in_round();
@@ -389,12 +381,6 @@ fn run(
                     produced_blocks + 1,
                     last_print.elapsed() - hover_time_since_last_print,
                 );
-                // Using this is a better measure of inserts compared to recreating recently deleted entries
-                results.record_throughput_as_total(
-                    "fresh_inserts",
-                    results.entries_in_db,
-                    last_print.elapsed() - hover_time_since_last_print,
-                );
                 hover_time_since_last_print = Duration::from_secs(0);
                 last_print = Instant::now();
             }
@@ -430,8 +416,6 @@ fn run(
                 // Hover test 结束的时间
                 println!("Timestamp: {}", Utc::now().to_rfc3339());
 
-                println!("Writing partial results to file: {output_filename}");
-                results.write_to_file(output_filename);
                 hover_time_since_last_print += hover_start.elapsed();
             }
 
@@ -551,17 +535,10 @@ fn run(
         thread::sleep(Duration::from_secs(60));
     }
 
-    println!("Block population complete. Writing partial results to file: {output_filename}");
-    results.write_to_file(output_filename);
+    println!("Block population complete.");
 
     results.log_system_stats();
-    results.success = true;
-    results.complete = true;
-    results.log_time("complete");
     results.print_summary();
-
-    println!("Writing results to file: {output_filename}");
-    results.write_to_file(output_filename);
     println!("Benchmarking completed successfully");
 }
 
@@ -739,11 +716,11 @@ fn run_hover_tasks(config: HoverTaskConfig) {
 
     let db_size_bytes = dir_size(Path::new(db_dir));
     let rss_kb = get_rss_kb();
-    result_log::write_line(&format!(
+    println!(
         "HOVER_END_STATS: db_size={:.2} GB  rss={:.2} GB",
         db_size_bytes as f64 / (1024.0 * 1024.0 * 1024.0),
         rss_kb as f64 / (1024.0 * 1024.0),
-    ));
+    );
 }
 
 fn hover_execute_op(config: HoverExecuteConfig) {
@@ -831,7 +808,7 @@ fn hover_execute_op(config: HoverExecuteConfig) {
     };
 
     // 1. 输出当前的磁盘的信息
-    let (start_os_read, start_os_write) = get_linux_disk_rw_sectors(result_log::monitor_disk()).unwrap_or((0, 0));
+    let (start_os_read, start_os_write) = get_linux_disk_rw_sectors(disk_monitor::monitor_disk()).unwrap_or((0, 0));
     println!("Timestamp (Start): {}", Utc::now().to_rfc3339());
 
     // 2. 核心执行逻辑
@@ -917,15 +894,13 @@ fn hover_execute_op(config: HoverExecuteConfig) {
     // bench timer stop ~2 blocks before engine completion, causing ~2-9% over-
     // measurement of throughput.
     db_backend::flush(table_id);
-    #[allow(unused_mut)]
-    let mut phase_dur = bm_start.elapsed();
     // QMDB: the updater treats OP_READ as a no-op, so flush() returns while the io_uring
     // prefetcher still has outstanding disk reads (~16% of a read phase). Wait for those to
     // drain — poll DIO_READ_COUNT until it plateaus — so the timer reflects the true read
     // completion time (SSD-bound), not the no-op updater's finish. This is a one-time
     // end-of-phase poll; for write phases the counter has already plateaued at flush.
     #[cfg(all(not(feature = "use_nomt"), not(feature = "use_reth"), not(feature = "use_lvmt")))]
-    {
+    let phase_dur = {
         let mut last = qmdb::prefetcher::dioprefetcher::dio_read_count();
         let mut last_change = Instant::now();
         loop {
@@ -939,14 +914,16 @@ fn hover_execute_op(config: HoverExecuteConfig) {
             }
         }
         // last_change marks the last real read; the 40ms plateau wait is excluded.
-        phase_dur = last_change.duration_since(bm_start);
-    }
+        last_change.duration_since(bm_start)
+    };
+    #[cfg(any(feature = "use_nomt", feature = "use_reth", feature = "use_lvmt"))]
+    let phase_dur = bm_start.elapsed();
     results.record_throughput(operation_name, block_count * op_in_blk, phase_dur);
 
     // 3. 输出当前的磁盘信息
     println!("Timestamp (End): {}", Utc::now().to_rfc3339());
     thread::sleep(Duration::from_secs(60)); 
-    let (end_os_read, end_os_write) = get_linux_disk_rw_sectors(result_log::monitor_disk()).unwrap_or((0, 0));
+    let (end_os_read, end_os_write) = get_linux_disk_rw_sectors(disk_monitor::monitor_disk()).unwrap_or((0, 0));
 
     print_unified_report(operation_name, block_count * op_in_blk, start_os_read, end_os_read, start_os_write, end_os_write);
 
@@ -1112,7 +1089,6 @@ fn run_eth_replay_mode(
     populate_end: u64,
     replay_start: u64,
     replay_end: u64,
-    results: &mut BenchmarkResults,
 ) {
     let start_height = populate_start;
     let end_height = populate_end;
@@ -1399,8 +1375,6 @@ fn run_eth_replay_mode(
     println!("Benchmark Finished.");
     println!("Total Ops: {}", total_ops);
     println!("Duration: {:.2}s", total_duration.as_secs_f64());
-    
-    results.record_throughput_as_total("eth_replay_ops", total_ops, total_duration);
 }
 
 /// Streaming source for the ETH-replay base state.
@@ -1487,11 +1461,10 @@ fn run_eth_replay_from_bundle(
     trace_dir: &str,
     replay_start: u64,
     replay_end: u64,
-    results: &mut BenchmarkResults,
 ) {
     run_eth_replay_inner(
         table_id, Some(trace_dir), Some(bundle_path),
-        0, 0, replay_start, replay_end, results,
+        0, 0, replay_start, replay_end,
     );
 }
 
@@ -1503,7 +1476,6 @@ fn run_eth_replay_inner(
     populate_end: u64,
     replay_start: u64,
     replay_end: u64,
-    results: &mut BenchmarkResults,
 ) {
     let start_height = populate_start;
     let end_height = populate_end;
@@ -1809,8 +1781,6 @@ fn run_eth_replay_inner(
     println!("Benchmark Finished.");
     println!("Total Ops: {}", total_ops);
     println!("Duration: {:.2}s", total_duration.as_secs_f64());
-    
-    results.record_throughput_as_total("eth_replay_ops", total_ops, total_duration);
 }
 
 fn rand_between_seg_idx(
@@ -1908,11 +1878,11 @@ fn print_unified_report(
     let os_read_bytes = (end_os_read_sectors.saturating_sub(start_os_read_sectors)) * LINUX_SECTOR_SIZE;
     let os_write_bytes = (end_os_write_sectors.saturating_sub(start_os_write_sectors)) * LINUX_SECTOR_SIZE;
 
-    result_log::write_line("----------------------------------------------------------------");
-    result_log::write_line(&format!("TEST_REPORT: Phase={} | Ops={}", phase, ops_count));
-    result_log::write_line(&format!("  > Total KV Size (Pure)  = {} bytes ({:.2} MB)", total_kv_size, total_kv_size as f64 / 1024.0 / 1024.0));
-    result_log::write_line("  [OS-level Disk IO]");
-    result_log::write_line(&format!("  > OS Physical Write = {} bytes ({:.2} MB)", os_write_bytes, os_write_bytes as f64 / 1024.0 / 1024.0));
-    result_log::write_line(&format!("  > OS Physical Read  = {} bytes ({:.2} MB)", os_read_bytes, os_read_bytes as f64 / 1024.0 / 1024.0));
-    result_log::write_line("----------------------------------------------------------------");
+    println!("----------------------------------------------------------------");
+    println!("TEST_REPORT: Phase={} | Ops={}", phase, ops_count);
+    println!("  > Total KV Size (Pure)  = {} bytes ({:.2} MB)", total_kv_size, total_kv_size as f64 / 1024.0 / 1024.0);
+    println!("  [OS-level Disk IO]");
+    println!("  > OS Physical Write = {} bytes ({:.2} MB)", os_write_bytes, os_write_bytes as f64 / 1024.0 / 1024.0);
+    println!("  > OS Physical Read  = {} bytes ({:.2} MB)", os_read_bytes, os_read_bytes as f64 / 1024.0 / 1024.0);
+    println!("----------------------------------------------------------------");
 }
