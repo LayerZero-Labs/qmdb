@@ -123,13 +123,26 @@ fn execute_writes(height: i64, task_list: Vec<RwLock<Option<SimpleTask>>>) {
     let g = global.as_mut().expect("LVMT not initialized");
     let db = &mut g.db.0;
 
-    for (kh, op_type, value) in all_ops.iter() {
+    // LVMT's commit() assumes each key is written at most once per epoch (it panics in
+    // Key::mid once a key is written ~86 times), so keep only the last write of each
+    // key. Equal keys are adjacent after the stable sort. Reads are unaffected: get()
+    // never sees uncommitted writes.
+    let mut superseded = vec![false; all_ops.len()];
+    let mut later_write: Option<&Vec<u8>> = None;
+    for (i, (kh, op_type, _)) in all_ops.iter().enumerate().rev() {
+        if matches!(*op_type, OP_CREATE | OP_WRITE | OP_DELETE) {
+            superseded[i] = later_write == Some(kh);
+            later_write = Some(kh);
+        }
+    }
+
+    for (i, (kh, op_type, value)) in all_ops.iter().enumerate() {
         let k = Key(kh.clone());
         match *op_type {
-            OP_CREATE | OP_WRITE => {
+            OP_CREATE | OP_WRITE if !superseded[i] => {
                 db.set(&k, value.clone().into_boxed_slice());
             }
-            OP_DELETE => {
+            OP_DELETE if !superseded[i] => {
                 db.set(&k, Box::new([]));
             }
             OP_READ => {
