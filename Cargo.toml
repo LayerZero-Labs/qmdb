@@ -1,7 +1,7 @@
 [workspace]
 # Vendored backend trees carry their own crates/workspaces — keep them out of
 # this workspace; they are reached only via bench's `../<sys>` path-deps.
-exclude = ["nomt", "reth", "lvmt", "eth-replay-kv"]
+exclude = ["nomt", "reth", "lvmt"]
 resolver = "2"
 members = [
     "crates/hpfile",

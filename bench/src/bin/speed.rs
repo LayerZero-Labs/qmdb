@@ -20,7 +20,7 @@ use rayon::prelude::*;
 use std::fs;
 use std::io;
 use std::panic;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -29,6 +29,7 @@ const N_TABLES: usize = 1;
 const PRIME1: u64 = 1299827; // Used for stride for hover_recreate_block
 
 use bench::speed::disk_monitor;
+use bench::speed::eth_replay;
 
 struct RunConfig<'a> {
     table_id: usize,
@@ -1097,28 +1098,22 @@ fn run_eth_replay_mode(
     println!("Replay   Range: Block {} to {}", replay_start, replay_end);
 
     let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
-    let source = eth_replay_kv::parse_storage_path(input_dir);
-    let s3_client = if source.is_s3() {
-        Some(rt.block_on(eth_replay_kv::new_s3_client()))
-    } else {
-        None
-    };
+    let source = PathBuf::from(input_dir);
 
     let mut global_db_height: i64 = 1;
 
     // Phase 1: 将KV文件中的内容读取到内存，生成init db内存版本
     println!("\n=== Phase 1: Populating Base State ===");
     
-    let (tx_p1, mut rx_p1) = tokio::sync::mpsc::channel(eth_replay_kv::PREFETCH_BUFFER_BLOCKS);
+    let (tx_p1, mut rx_p1) = tokio::sync::mpsc::channel(eth_replay::PREFETCH_BUFFER_BLOCKS);
     let source_clone_p1 = source.clone();
-    let client_clone_p1 = s3_client.clone();
     
     // 启动生产者，按区块顺序吐出 base_kv 和 ops
     rt.spawn(async move {
-        eth_replay_kv::run_block_data_producer(start_height, end_height, source_clone_p1, client_clone_p1, tx_p1).await
+        eth_replay::run_block_data_producer(start_height, end_height, source_clone_p1, tx_p1).await
     });
 
-    let mut splitter = eth_replay_kv::BaseStateSplitter::new();
+    let mut splitter = eth_replay::BaseStateSplitter::new();
     
     rt.block_on(async {
         while let Some(msg) = rx_p1.recv().await {
@@ -1209,13 +1204,12 @@ fn run_eth_replay_mode(
     println!("
 === Pre-loading replay ops [{}, {}] into RAM ===", replay_start, replay_end);
     let preload_start = Instant::now();
-    let mut replay_blocks: Vec<(u64, Option<Vec<eth_replay_kv::Operation>>)> = Vec::new();
+    let mut replay_blocks: Vec<(u64, Option<Vec<eth_replay::Operation>>)> = Vec::new();
     {
-        let (tx_pre, mut rx_pre) = tokio::sync::mpsc::channel(eth_replay_kv::PREFETCH_BUFFER_BLOCKS);
+        let (tx_pre, mut rx_pre) = tokio::sync::mpsc::channel(eth_replay::PREFETCH_BUFFER_BLOCKS);
         let source_pre = source.clone();
-        let client_pre = s3_client.clone();
         rt.spawn(async move {
-            eth_replay_kv::run_ops_producer(replay_start, replay_end, source_pre, client_pre, tx_pre).await
+            eth_replay::run_ops_producer(replay_start, replay_end, source_pre, tx_pre).await
         });
         rt.block_on(async {
             while let Some(msg) = rx_pre.recv().await {
@@ -1270,12 +1264,12 @@ fn run_eth_replay_mode(
             
             if ops_opt.is_none() && current_boundary_ops.is_none() { continue; }
 
-            let mut process_op = |op: &eth_replay_kv::Operation| {
+            let mut process_op = |op: &eth_replay::Operation| {
                 let (op_code, key_ref, val_ref) = match op {
-                    eth_replay_kv::Operation::Create(k, v) => (OP_CREATE, k, Some(v)),
-                    eth_replay_kv::Operation::Update(k, v) => (OP_WRITE, k, Some(v)),
-                    eth_replay_kv::Operation::Delete(k)    => (OP_DELETE, k, None),
-                    eth_replay_kv::Operation::Read(k, v)   => (OP_READ, k, Some(v)), 
+                    eth_replay::Operation::Create(k, v) => (OP_CREATE, k, Some(v)),
+                    eth_replay::Operation::Update(k, v) => (OP_WRITE, k, Some(v)),
+                    eth_replay::Operation::Delete(k)    => (OP_DELETE, k, None),
+                    eth_replay::Operation::Read(k, v)   => (OP_READ, k, Some(v)), 
                 };
 
                 // 【切分逻辑 1】：防 Key 冲突 (真实 ETH 数据必须要有，否则会 Panic/错误)
@@ -1395,7 +1389,7 @@ fn run_eth_replay_mode(
 enum InitDbSource {
     Mem {
         iter: Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)>>,
-        boundary: std::collections::HashMap<u64, Vec<eth_replay_kv::Operation>>,
+        boundary: std::collections::HashMap<u64, Vec<eth_replay::Operation>>,
     },
     Stream {
         r: std::io::BufReader<std::fs::File>,
@@ -1429,7 +1423,7 @@ impl InitDbSource {
         self,
         replay_start: u64,
         replay_end: u64,
-    ) -> std::collections::HashMap<u64, Vec<eth_replay_kv::Operation>> {
+    ) -> std::collections::HashMap<u64, Vec<eth_replay::Operation>> {
         match self {
             InitDbSource::Mem { mut boundary, .. } => {
                 boundary.retain(|h, _| *h >= replay_start && *h <= replay_end);
@@ -1442,7 +1436,7 @@ impl InitDbSource {
                     .expect("bincode deserialize boundary_ops len");
                 let mut map = std::collections::HashMap::new();
                 for _ in 0..n {
-                    let (h, ops): (u64, Vec<eth_replay_kv::Operation>) =
+                    let (h, ops): (u64, Vec<eth_replay::Operation>) =
                         bincode::deserialize_from(&mut r)
                             .expect("bincode deserialize boundary_ops entry");
                     if h >= replay_start && h <= replay_end {
@@ -1485,12 +1479,7 @@ fn run_eth_replay_inner(
     println!("Replay   Range: Block {} to {}", replay_start, replay_end);
 
     let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
-    let source = input_dir.map(eth_replay_kv::parse_storage_path);
-    let s3_client = if source.as_ref().map_or(false, |s| s.is_s3()) {
-        Some(rt.block_on(eth_replay_kv::new_s3_client()))
-    } else {
-        None
-    };
+    let source = input_dir.map(PathBuf::from);
 
     let mut global_db_height: i64 = 1;
 
@@ -1517,13 +1506,12 @@ fn run_eth_replay_inner(
     } else {
         println!("\n=== Phase 1: Populating Base State (from trace) ===");
         let source = source.clone().expect("source required when bundle not given");
-        let (tx_p1, mut rx_p1) = tokio::sync::mpsc::channel(eth_replay_kv::PREFETCH_BUFFER_BLOCKS);
+        let (tx_p1, mut rx_p1) = tokio::sync::mpsc::channel(eth_replay::PREFETCH_BUFFER_BLOCKS);
         let source_clone_p1 = source.clone();
-        let client_clone_p1 = s3_client.clone();
         rt.spawn(async move {
-            eth_replay_kv::run_block_data_producer(start_height, end_height, source_clone_p1, client_clone_p1, tx_p1).await
+            eth_replay::run_block_data_producer(start_height, end_height, source_clone_p1, tx_p1).await
         });
-        let mut splitter = eth_replay_kv::BaseStateSplitter::new();
+        let mut splitter = eth_replay::BaseStateSplitter::new();
         rt.block_on(async {
             while let Some(msg) = rx_p1.recv().await {
                 let (height, base_kv_opt, ops_opt) = msg.expect("Failed to receive from producer");
@@ -1627,9 +1615,8 @@ fn run_eth_replay_inner(
     let source_stream = source.clone().expect("eth-trace-dir is required for Phase 3 replay");
     let (tx_stream, mut rx_stream) = tokio::sync::mpsc::channel(50);
     let source_pre = source_stream.clone();
-    let client_pre = s3_client.clone();
     rt.spawn(async move {
-        eth_replay_kv::run_ops_producer(replay_start, replay_end, source_pre, client_pre, tx_stream).await
+        eth_replay::run_ops_producer(replay_start, replay_end, source_pre, tx_stream).await
     });
 
     // Drop OS page cache so Phase 3 SSD I/O is cold for QMDB engine.
@@ -1676,12 +1663,12 @@ fn run_eth_replay_inner(
             
             if ops_opt.is_none() && current_boundary_ops.is_none() { continue; }
 
-            let mut process_op = |op: &eth_replay_kv::Operation| {
+            let mut process_op = |op: &eth_replay::Operation| {
                 let (op_code, key_ref, val_ref) = match op {
-                    eth_replay_kv::Operation::Create(k, v) => (OP_CREATE, k, Some(v)),
-                    eth_replay_kv::Operation::Update(k, v) => (OP_WRITE, k, Some(v)),
-                    eth_replay_kv::Operation::Delete(k)    => (OP_DELETE, k, None),
-                    eth_replay_kv::Operation::Read(k, v)   => (OP_READ, k, Some(v)), 
+                    eth_replay::Operation::Create(k, v) => (OP_CREATE, k, Some(v)),
+                    eth_replay::Operation::Update(k, v) => (OP_WRITE, k, Some(v)),
+                    eth_replay::Operation::Delete(k)    => (OP_DELETE, k, None),
+                    eth_replay::Operation::Read(k, v)   => (OP_READ, k, Some(v)), 
                 };
 
                 // 【切分逻辑 1】：防 Key 冲突 (真实 ETH 数据必须要有，否则会 Panic/错误)

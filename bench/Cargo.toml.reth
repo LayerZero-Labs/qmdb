@@ -24,6 +24,8 @@ lazy_static = "1.4.0"
 sha2 = "0.10"
 fxhash = "0.2"
 bincode = "1.3"
+anyhow = { workspace = true }
+futures = "0.3"
 
 nomt = { path = "../nomt/nomt", optional = true }
 nomt-core = { path = "../nomt/core", optional = true }
@@ -47,7 +49,6 @@ reth-primitives = { path = "../reth/crates/primitives", optional = true }
 reth-node-types = { path = "../reth/crates/node/types", optional = true }
 alloy-primitives = { version = "0.8.26", optional = true }
 
-eth-replay-kv = {path = "../eth-replay-kv/"}
 tokio.workspace = true
 rand = { version = "0.10.0", features = ["std", "std_rng"] }
 

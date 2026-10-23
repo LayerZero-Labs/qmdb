@@ -1,5 +1,6 @@
 pub mod db_backend;
 pub mod disk_monitor;
+pub mod eth_replay;
 pub mod zipf;
 pub mod def;
 pub mod hover_gen;
