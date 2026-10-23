@@ -82,6 +82,7 @@
 //! let curr_height = 1i64;
 //! let max_height = 100i64;
 //! let (end_block_sender, end_block_chan) = unbounded();
+//! let (prune_sender, _prune_receiver) = unbounded();
 //!
 //! // Create a single flusher shard (for demonstration)
 //! let shard = FlusherShard::new(
@@ -98,6 +99,7 @@
 //!     curr_height,         // Current block height
 //!     max_height,          // Maximum blocks to keep
 //!     end_block_sender,    // Block completion channel
+//!     prune_sender,        // Pruned-segment notifications for the prefetcher
 //! );
 //!
 //! // Start flushing
@@ -383,6 +385,7 @@ mod flusher_tests {
             curr_height: 0,
             max_kept_height: 1000,
             end_block_chan: eb_sender,
+            prune_sender: bounded(1).0,
         };
 
         let shard_id = 0;
