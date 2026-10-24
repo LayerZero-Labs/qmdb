@@ -29,12 +29,10 @@ lazy_static! {
 }
 
 // 2. 初始化
-pub fn init(db_dir: &str, start_from_existing: bool) {
+pub fn init(db_dir: &str) {
     let path = Path::new(db_dir);
     
-    if !start_from_existing {
-        let _ = std::fs::remove_dir_all(&path);
-    }
+    let _ = std::fs::remove_dir_all(&path);
     std::fs::create_dir_all(&path).expect("Failed to create NOMT dir");
 
     let mut opts = Options::new();

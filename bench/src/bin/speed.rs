@@ -54,9 +54,8 @@ struct HoverTaskConfig<'a> {
     hover_write_block: u64,
     /// Zipf exponent for read/write key selection. 0.0 = uniform.
     zipf_theta: f64,
-    /// True only for the post-population hover (last block), start-from-existing,
-    /// or the immediate-existing hover. Insert+delete run ONLY when this is true;
-    /// mid-population hovers run read/write only.
+    /// True only for the post-population hover (last block). Insert+delete run
+    /// ONLY when this is true; mid-population hovers run read/write only.
     is_final: bool,
     results: &'a mut BenchmarkResults,
 
@@ -113,7 +112,6 @@ struct SingleHoverBlockConfig<'a> {
 
 fn main() {
     let args: Cli = Cli::parse();
-    let start_from_existing = args.start_from_existing;
     let mut results = BenchmarkResults::new(&args);
     let table_id = 0;
     rayon::ThreadPoolBuilder::new()
@@ -128,7 +126,7 @@ fn main() {
     // drives DB path + I/O counters).
     disk_monitor::init_monitor_disk(&args.monitor_disk, args.db_dir.as_str());
     for i in 0..N_TABLES {
-        db_backend::init(args.db_dir.as_str(), i, start_from_existing, is_eth_mode, args.entry_count);
+        db_backend::init(args.db_dir.as_str(), i, is_eth_mode);
     }
     println!("Using database backend: {}", db_backend::NAME);
     thread::sleep(Duration::from_secs(15));
@@ -196,75 +194,49 @@ fn main() {
         }
 
         // 数据库初始化阶段需要的 block 数
-        let mut blocks_for_db_population = args.entry_count / args.ops_per_block;
+        let blocks_for_db_population = args.entry_count / args.ops_per_block;
 
-        let mut initial_height: i64;
+        // 4. 打印 workload 配置并检查 hover 参数
+        println!("\n=================================");
+        println!("!!! STARTING FROM AN EMPTY DB !!!");
+        println!("=================================\n");
 
-        // 4. 根据是否从已有数据库启动，设置初始高度与工作量
-        if start_from_existing {
-            println!("\n===============================================================");
-            println!("!!! STARTING FROM AN EXISTING DB: Skipping Population Phase !!!");
-            println!("===============================================================\n");
+        println!("Workload configuration:");
+        println!("  Blocks for DB population: {}", blocks_for_db_population);
+        println!("  Changesets per task/transaction: {}", args.changesets_per_task);
+        println!("  Operations per changeset: {}", ops_per_changeset);
+        println!("  Tasks (transactions) per block: {}", tasks_per_block);
+        println!("  Total operations per block: ~{}", tasks_per_block * args.changesets_per_task * ops_per_changeset);
 
-            // 1. 快进高度：让 TestGen 生成新的 key，而不是覆盖旧数据
-            initial_height = (blocks_for_db_population as i64) + 1;
+        info!(
+            "{} blocks x {} ops per block = {} entries created",
+            blocks_for_db_population, args.ops_per_block, args.entry_count
+        );
+        info!(
+            "Every {} blocks ({} entries), we will benchmark ops/sec",
+            args.hover.hover_interval,
+            args.hover.hover_interval * args.ops_per_block
+        );
 
-            // 2. 告诉 results 当前已有多少 entries，确保 TPS 计算正确
-            results.update_entries_in_db(args.entry_count);
-
-            // 3. 跳过数据库构建阶段
-            blocks_for_db_population = 0;
-
-            println!("Workload configuration (Existing DB Mode):");
-            println!("  Assumed Existing Entries: {}", args.entry_count);
-            println!("  Starting Height: {}", initial_height);
-            println!("  Changesets per task: {}", args.changesets_per_task);
-            println!("  Tasks per block: {}", tasks_per_block);
-
-        } else {
-            println!("\n=================================");
-            println!("!!! STARTING FROM AN EMPTY DB !!!");
-            println!("=================================\n");
-
-            initial_height = 1;
-
-            println!("Workload configuration:");
-            println!("  Blocks for DB population: {}", blocks_for_db_population);
-            println!("  Changesets per task/transaction: {}", args.changesets_per_task);
-            println!("  Operations per changeset: {}", ops_per_changeset);
-            println!("  Tasks (transactions) per block: {}", tasks_per_block);
-            println!("  Total operations per block: ~{}", tasks_per_block * args.changesets_per_task * ops_per_changeset);
-
-            info!(
-                "{} blocks x {} ops per block = {} entries created",
-                blocks_for_db_population, args.ops_per_block, args.entry_count
-            );
-            info!(
-                "Every {} blocks ({} entries), we will benchmark ops/sec",
+        // hover 参数合法性检查
+        if args.hover.hover_interval > blocks_for_db_population {
+            warn!(
+                "ERROR: hover_interval {} is greater than the number of blocks in a round {}; it will never run",
                 args.hover.hover_interval,
-                args.hover.hover_interval * args.ops_per_block
+                blocks_for_db_population
             );
-
-            // hover 参数合法性检查
-            if args.hover.hover_interval > blocks_for_db_population {
-                warn!(
-                    "ERROR: hover_interval {} is greater than the number of blocks in a round {}; it will never run",
-                    args.hover.hover_interval,
-                    blocks_for_db_population
-                );
-            }
-            if args.hover.hover_recreate_block > blocks_for_db_population {
-                warn!(
-                    "hover_recreate_block {} is greater than the number of blocks in a round {}",
-                    args.hover.hover_recreate_block, blocks_for_db_population
-                );
-            }
-            if args.hover.hover_write_block > blocks_for_db_population {
-                warn!(
-                    "hover_write_block {} is greater than the number of blocks in a round {}",
-                    args.hover.hover_write_block, blocks_for_db_population
-                );
-            }
+        }
+        if args.hover.hover_recreate_block > blocks_for_db_population {
+            warn!(
+                "hover_recreate_block {} is greater than the number of blocks in a round {}",
+                args.hover.hover_recreate_block, blocks_for_db_population
+            );
+        }
+        if args.hover.hover_write_block > blocks_for_db_population {
+            warn!(
+                "hover_write_block {} is greater than the number of blocks in a round {}",
+                args.hover.hover_write_block, blocks_for_db_population
+            );
         }
 
         // 5. 创建 TestGen（生成 workload）
@@ -290,15 +262,11 @@ fn main() {
                 hover_write_block: args.hover.hover_write_block,
                 zipf_theta: args.hover.hover_zipf_theta,
             },
-            initial_height,
         );
     }
 }
 
-fn run(
-    config: RunConfig,
-    initial_height: i64,
-) {
+fn run(config: RunConfig) {
     let RunConfig {
         table_id,
         db_dir,
@@ -312,7 +280,7 @@ fn run(
     } = config;
 
     let blk_in_round = test_gen.block_in_round();
-    let mut height = initial_height;
+    let mut height: i64 = 1;
     let mut current_decile_print: i64 = -1;
 
     let mut last_print = Instant::now();
@@ -326,214 +294,102 @@ fn run(
     let start = Instant::now();
 
     // Populate the database
-    if height == 1 {
-        for produced_blocks in 0..blk_in_round {
-            // Every hover_interval blocks, we run hover tasks to benchmark ops
-            // Every hover_write_block blocks, we time how long it takes to create the blocks
-            // Height increases for every block added (here and in run_single_hover_block)
+    for produced_blocks in 0..blk_in_round {
+        // Every hover_interval blocks, we run hover tasks to benchmark ops
+        // Every hover_write_block blocks, we time how long it takes to create the blocks
+        // Height increases for every block added (here and in run_single_hover_block)
 
-            // 每10%输出一次进度
-            if current_decile_print < (produced_blocks as f64 / blk_in_round as f64 * 10.0) as i64
-                || produced_blocks == 0
-                || produced_blocks == blk_in_round - 1
-                || produced_blocks % 10 == 0
-            {
-                let time_left = if produced_blocks > 0 {
-                    start
-                        .elapsed()
-                        .mul_f64(((blk_in_round - produced_blocks) as f64) / (produced_blocks as f64))
-                } else {
-                    Duration::from_secs(0)
-                };
-                println!(
-                    "{}%: producing block {} (entry {} - {}) [Time left: {:.2?}]",
-                    produced_blocks * 100 / blk_in_round,
-                    produced_blocks,
-                    produced_blocks * test_gen.num_op_in_blk(),
-                    (produced_blocks + 1) * test_gen.num_op_in_blk(),
-                    time_left
-                );
-                current_decile_print = (produced_blocks as f64 / blk_in_round as f64 * 10.0) as i64;
-            }
-            
-            // 1. 生成population的block
-            let task_list = test_gen.gen_block();
-
-            // 2. 提交block至backend database
-            db_backend::create_kv(table_id, height, task_list);
-            height += 1;
-
-            results.update_entries_in_db((produced_blocks + 1) * test_gen.num_op_in_blk());
-
-            // 记录Population数据
-            // 1. Update the user interactively, time left, TPS -- based on time elapsed
-            // 2. Log throughput every K blocks so that we can see the trend
-            //    - Need to update the last value, and store a new value in a vector
-            //    - Should also log the timestamp (absolute and relative)
-            // Print a progress message every hover_write_block=10(dev)/1500(test) blocks
-            let update_now = 
-                (hover_write_block == 0) 
-                || (produced_blocks % hover_write_block == 0) 
-                || (produced_blocks == blk_in_round - 1);
-
-            if update_now {
-                results.record_throughput_as_total(
-                    "block_population",
-                    produced_blocks + 1,
-                    last_print.elapsed() - hover_time_since_last_print,
-                );
-                hover_time_since_last_print = Duration::from_secs(0);
-                last_print = Instant::now();
-            }
-
-            // 周期性运行Hover test
-            // We need to ensure that hover_recreate_block <= number of produced entries
-            // Run delete/create/update/read benchmarks every hover_interval blocks (not on the first block)
-            if (produced_blocks + 1) % hover_interval == 0 || produced_blocks == blk_in_round - 1 {
-                // Hover test 开始的时间
-                thread::sleep(Duration::from_secs(60));
-                println!("Timestamp: {}", Utc::now().to_rfc3339());
-
-                let hover_start = Instant::now();
-                results.log_system_stats();
-
-                // Final hover = the post-population one (last block). Only then run
-                // insert/delete; mid-population hovers are read/write only.
-                let is_final = produced_blocks == blk_in_round - 1;
-                run_hover_tasks(HoverTaskConfig {
-                    table_id,
-                    db_dir,
-                    randsrc,
-                    height: &mut height,
-                    test_gen,
-                    hover_recreate_block,
-                    hover_write_block,
-                    zipf_theta,
-                    is_final,
-                    results,
-                    total_deleted_keys: &mut total_deleted_keys,
-                });
-
-                // Hover test 结束的时间
-                println!("Timestamp: {}", Utc::now().to_rfc3339());
-
-                hover_time_since_last_print += hover_start.elapsed();
-            }
-
-            if height % 10 == 0 {
-                COUNTERS.print();
-            }
-        }
-    } else {
-        // === 从已有数据启动 (Start From Existing) ===
-        // 我们跳过了造数据过程，但我们希望能测一下当前已有数据的性能 (Hover Test)
-        // 就像原本 Population 最后一次 Hover Test 那样
-        
-        println!("!!! Skipping Population Loop (Starting from height {}) !!!", height);
-        println!("Running immediate Hover Test on existing database state...");
-
-        thread::sleep(Duration::from_secs(60));
-        println!("Timestamp: {}", Utc::now().to_rfc3339());
-        
-        // 1. test_gen更新
-        for i in 0..(height - 1) {
-            let _ = test_gen.gen_block(); 
-            
-            // 打印一点进度，防止以为卡死了
-            if i % 100 == 0 {
-                use std::io::Write;
-                print!("\nFast-forwarding: {}/{}", i, height - 1);
-                std::io::stdout().flush().unwrap();
-            }
-        }
-        println!("Timestamp: {}", Utc::now().to_rfc3339());
-
-        // 2. cache warmup
-        // TODO: RETH需要这个逻辑
-        // TODO: 这里的read是错的！需要重写这部分
-        #[cfg(any(feature = "use_nomt"))]
+        // 每10%输出一次进度
+        if current_decile_print < (produced_blocks as f64 / blk_in_round as f64 * 10.0) as i64
+            || produced_blocks == 0
+            || produced_blocks == blk_in_round - 1
+            || produced_blocks % 10 == 0
         {
-            let total_entries = test_gen.sp.entry_count as u64;
-            println!("Warmup START: Reading entire database sequentially (0 to {}) !!!", total_entries);
-            let warmup_start = Instant::now();
-            
-            // 每次提交的并发量，可根据机器配置调整
-            let batch_size = 100000; 
-            let mut tasks = Vec::with_capacity(batch_size);
-
-            for i in 0..total_entries {
-                let mut k = [0u8; 20];
-                let mut v = [0u8; 32];
-                
-                // 使用 test_gen 计算确定性的 Key (和 Populate 阶段一致)
-                let kh = test_gen.fill_kv(i as u64, &mut k[..], &mut v[..]);
-
-                
-                // 构造 READ 操作
-                let mut cset = ChangeSet::new();
-                cset.add_op(OP_READ, &kh, &k[..], &v[..], None);
-                cset.sort();
-                
-                // 封装成 SimpleTask
-                let task = SimpleTask::new(vec![cset]);
-                tasks.push(RwLock::new(Some(task)));
-
-                // 批次发送
-                if tasks.len() >= batch_size {
-                    db_backend::read_kv(table_id, tasks);
-                    tasks = Vec::with_capacity(batch_size); // Reset buffer
-
-                    if (i + 1) % 1_000_000 == 0 {
-                        let elapsed = warmup_start.elapsed().as_secs_f64();
-                        println!(
-                            "Warmup progress: {}/{} ({:.1}%) - Speed: {:.2} M ops/sec", 
-                            i + 1, 
-                            total_entries, 
-                            ((i + 1) as f64 / total_entries as f64) * 100.0,
-                            (i + 1) as f64 / 1_000_000.0 / elapsed
-                        );
-                    }
-                }
-            }
-
-            // 处理剩余部分
-            if !tasks.is_empty() {
-                db_backend::read_kv(table_id, tasks);
-            }
-
-            println!("!!! Warmup COMPLETE: Took {:.2?} !!!", warmup_start.elapsed());
-            
-            // 强制休眠，确保 OS 层面的预读/Writeback 彻底平息，不影响后续 Hover 压测的 IO 统计
-            thread::sleep(Duration::from_secs(60));
+            let time_left = if produced_blocks > 0 {
+                start
+                    .elapsed()
+                    .mul_f64(((blk_in_round - produced_blocks) as f64) / (produced_blocks as f64))
+            } else {
+                Duration::from_secs(0)
+            };
+            println!(
+                "{}%: producing block {} (entry {} - {}) [Time left: {:.2?}]",
+                produced_blocks * 100 / blk_in_round,
+                produced_blocks,
+                produced_blocks * test_gen.num_op_in_blk(),
+                (produced_blocks + 1) * test_gen.num_op_in_blk(),
+                time_left
+            );
+            current_decile_print = (produced_blocks as f64 / blk_in_round as f64 * 10.0) as i64;
         }
-        #[cfg(feature = "use_reth")]
-        {   
-            // warmup metadata part
-            db_backend::warmup_trie();
-        }
-        println!("Timestamp: {}", Utc::now().to_rfc3339());
         
-        // 3. 开始CRUD性能测试
-        let hover_start = Instant::now();
-        results.log_system_stats();
+        // 1. 生成population的block
+        let task_list = test_gen.gen_block();
 
-        run_hover_tasks(HoverTaskConfig {
-            table_id,
-            db_dir,
-            randsrc,
-            height: &mut height,
-            test_gen,
-            hover_recreate_block,
-            hover_write_block,
-            zipf_theta,
-            is_final: true,
-            results,
-            total_deleted_keys: &mut total_deleted_keys,
-        });
+        // 2. 提交block至backend database
+        db_backend::create_kv(table_id, height, task_list);
+        height += 1;
 
-        // 记录一下时间，虽然不计入 population throughput，但有助于日志对齐
-        hover_time_since_last_print += hover_start.elapsed();
-        thread::sleep(Duration::from_secs(60));
+        results.update_entries_in_db((produced_blocks + 1) * test_gen.num_op_in_blk());
+
+        // 记录Population数据
+        // 1. Update the user interactively, time left, TPS -- based on time elapsed
+        // 2. Log throughput every K blocks so that we can see the trend
+        //    - Need to update the last value, and store a new value in a vector
+        //    - Should also log the timestamp (absolute and relative)
+        // Print a progress message every hover_write_block=10(dev)/1500(test) blocks
+        let update_now = 
+            (hover_write_block == 0) 
+            || (produced_blocks % hover_write_block == 0) 
+            || (produced_blocks == blk_in_round - 1);
+
+        if update_now {
+            results.record_throughput_as_total(
+                "block_population",
+                produced_blocks + 1,
+                last_print.elapsed() - hover_time_since_last_print,
+            );
+            hover_time_since_last_print = Duration::from_secs(0);
+            last_print = Instant::now();
+        }
+
+        // 周期性运行Hover test
+        // We need to ensure that hover_recreate_block <= number of produced entries
+        // Run delete/create/update/read benchmarks every hover_interval blocks (not on the first block)
+        if (produced_blocks + 1) % hover_interval == 0 || produced_blocks == blk_in_round - 1 {
+            // Hover test 开始的时间
+            thread::sleep(Duration::from_secs(60));
+            println!("Timestamp: {}", Utc::now().to_rfc3339());
+
+            let hover_start = Instant::now();
+            results.log_system_stats();
+
+            // Final hover = the post-population one (last block). Only then run
+            // insert/delete; mid-population hovers are read/write only.
+            let is_final = produced_blocks == blk_in_round - 1;
+            run_hover_tasks(HoverTaskConfig {
+                table_id,
+                db_dir,
+                randsrc,
+                height: &mut height,
+                test_gen,
+                hover_recreate_block,
+                hover_write_block,
+                zipf_theta,
+                is_final,
+                results,
+                total_deleted_keys: &mut total_deleted_keys,
+            });
+
+            // Hover test 结束的时间
+            println!("Timestamp: {}", Utc::now().to_rfc3339());
+
+            hover_time_since_last_print += hover_start.elapsed();
+        }
+
+        if height % 10 == 0 {
+            COUNTERS.print();
+        }
     }
 
     println!("Block population complete.");

@@ -441,7 +441,7 @@ The first two change performance only; none of the changes affects Merkle roots,
 A backend implements six functions, and `speed` calls them through `bench/src/speed/db_backend.rs`:
 
 ```rust
-pub fn init(db_dir: &str, start_from_existing: bool);
+pub fn init(db_dir: &str);
 pub fn create_kv(height: i64, task_list: Vec<RwLock<Option<SimpleTask>>>);
 pub fn update_kv(height: i64, task_list: Vec<RwLock<Option<SimpleTask>>>);
 pub fn delete_kv(height: i64, task_list: Vec<RwLock<Option<SimpleTask>>>);
@@ -467,7 +467,6 @@ and dispatch on `OP_CREATE`, `OP_WRITE`, `OP_DELETE` and `OP_READ` from `qmdb_co
 - **LVMT cannot find its parameters:** run `speed_lvmt` from `bench/` so that `../lvmt/pp` resolves.
 - **Cargo resolution error mentioning `links = "zstd"`:** run `bench/switch_backend.sh lvmt` or `reth` before building.
 - **Panic at start-up:** `--entry-count` must be a multiple of `--ops-per-block`.
-- **`--start-from-existing`** reopens an existing database only for NOMT and Reth; QMDB, LVMT and MDBX start fresh.
 - **Known build failures:** the MDBX backend (`use_mdbx`), the bench feature `qmdb_bench_correctness` and the QMDB
   feature `tee_cipher` do not compile; none of them is used in the paper.
 - **`run_{qmdb,nomt,lvmt,reth}_benchmark.sh`** are the reference scripts from our cluster and are not ready to use as is:

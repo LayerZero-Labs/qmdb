@@ -56,7 +56,7 @@ lazy_static! {
     static ref GLOBAL_LVMT: Mutex<Option<GlobalLvmt>> = Mutex::new(None);
 }
 
-pub fn init(db_dir: &str, _start_from_existing: bool) {
+pub fn init(db_dir: &str) {
     let _ = std::fs::remove_dir_all(db_dir);
     std::fs::create_dir_all(db_dir).expect("Failed to create db dir");
 

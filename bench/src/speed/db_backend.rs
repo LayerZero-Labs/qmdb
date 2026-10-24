@@ -15,25 +15,25 @@ pub const NAME: &str = "LVMT";
 pub const NAME: &str = "QMDB";
 
 #[cfg(feature = "use_nomt")]
-pub fn init(db_dir: &str, _: usize, start_from_existing: bool, _: bool, _: u64) {
+pub fn init(db_dir: &str, _: usize, _: bool) {
     let path = Path::new(db_dir).join("NOMT");
-    crate::speed::nomt_adapter::init(path.to_str().unwrap(), start_from_existing);
+    crate::speed::nomt_adapter::init(path.to_str().unwrap());
 }
 
 #[cfg(feature = "use_reth")]
-pub fn init(db_dir: &str, _: usize, start_from_existing: bool, is_eth_mode: bool, entry_count: u64) {
+pub fn init(db_dir: &str, _: usize, is_eth_mode: bool) {
     let path = Path::new(db_dir).join("RETH");
-    crate::speed::reth_adapter::init(path.to_str().unwrap(), start_from_existing, is_eth_mode, entry_count);
+    crate::speed::reth_adapter::init(path.to_str().unwrap(), is_eth_mode);
 }
 
 #[cfg(feature = "use_lvmt")]
-pub fn init(db_dir: &str, _: usize, _start_from_existing: bool, _: bool, _: u64) {
+pub fn init(db_dir: &str, _: usize, _: bool) {
     let path = Path::new(db_dir).join("LVMT");
-    crate::speed::lvmt_adapter::init(path.to_str().unwrap(), false);
+    crate::speed::lvmt_adapter::init(path.to_str().unwrap());
 }
 
 #[cfg(all(not(feature = "use_nomt"), not(feature = "use_reth"), not(feature = "use_lvmt")))]
-pub fn init(db_dir: &str, table_id: usize, _: bool, _: bool, _: u64) {
+pub fn init(db_dir: &str, table_id: usize, _: bool) {
     let path = Path::new(db_dir).join("ADS");
     crate::speed::qmdb::init(path.to_str().unwrap(), table_id);
 }
@@ -124,9 +124,4 @@ pub fn flush(_: usize) {}
 #[cfg(all(not(feature = "use_nomt"), not(feature = "use_reth"), not(feature = "use_lvmt")))]
 pub fn flush(table_id: usize) {
     crate::speed::qmdb::flush(table_id);
-}
-
-#[cfg(feature = "use_reth")]
-pub fn warmup_trie() {
-    crate::speed::reth_adapter::warmup_trie();
 }

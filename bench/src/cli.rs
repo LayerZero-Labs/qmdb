@@ -30,10 +30,6 @@ pub struct Cli {
     #[command(flatten)]
     pub hover: HoverWorkloadArgs,
 
-    /// Start benchmark from an existing database (skip Round 0 population)
-    #[arg(long, default_value_t = false)]
-    pub start_from_existing: bool,
-
     /// Benchmark threads
     #[arg(long, default_value_t = 64)]
     pub rayon_threads: usize,

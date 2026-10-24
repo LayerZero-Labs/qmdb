@@ -3,10 +3,9 @@
 // General imports
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use parking_lot::RwLock;
 use rayon::prelude::*;
-use byteorder::{BigEndian, ByteOrder};
 use std::time::Duration;
 
 // Reth imports
@@ -31,7 +30,6 @@ use reth_db::mdbx::DatabaseArguments;
 use qmdb_common::task::task::Task;
 use qmdb::test_helper::SimpleTask;
 use qmdb_common::def::{OP_CREATE, OP_DELETE, OP_WRITE, OP_READ};
-use qmdb_common::entryfile::entry::entry_key_hash;
 
 type BenchNode = NodeTypesWithDBAdapter<MockNodeTypes, Arc<reth_db::DatabaseEnv>>;
 
@@ -57,10 +55,6 @@ pub struct BatchPool {
 /// False for synthetic benchmark (all keys are uniform 52-byte, treated as accounts).
 static IS_ETH_MODE: AtomicBool = AtomicBool::new(false);
 
-/// Total number of entries written during population.
-/// Used by warmup_trie() to generate all keccak256 account addresses for seeks.
-static WARMUP_ENTRY_COUNT: AtomicU64 = AtomicU64::new(0);
-
 lazy_static::lazy_static! {
     static ref RETH_FACTORY: RwLock<Option<ProviderFactory<BenchNode>>> = RwLock::new(None);
     static ref BATCH_POOL: RwLock<BatchPool> = RwLock::new(BatchPool::default());
@@ -82,14 +76,11 @@ fn parse_u256(value: &[u8]) -> U256 {
     U256::from_be_bytes(padded)
 }
 
-pub fn init(db_dir: &str, start_from_existing: bool, is_eth_mode: bool, entry_count: u64) {
+pub fn init(db_dir: &str, is_eth_mode: bool) {
     IS_ETH_MODE.store(is_eth_mode, Ordering::Relaxed);
-    WARMUP_ENTRY_COUNT.store(entry_count, Ordering::Relaxed);
     let path = Path::new(db_dir);
 
-    if !start_from_existing {
-        let _ = std::fs::remove_dir_all(&path);
-    }
+    let _ = std::fs::remove_dir_all(&path);
     std::fs::create_dir_all(&path).expect("Failed to create RETH dir");
 
     let db_args = DatabaseArguments::default().with_max_read_transaction_duration(Some(MaxReadTransactionDuration::Set(Duration::from_secs(36000))));
@@ -105,8 +96,8 @@ pub fn init(db_dir: &str, start_from_existing: bool, is_eth_mode: bool, entry_co
 
     let db_path = Path::new(db_dir).join("mdbx.dat");
     println!(
-        "[INIT] Reth adapter ready. db={:?} start_from_existing={} is_eth_mode={} BATCH_SIZE={}",
-        db_path, start_from_existing, is_eth_mode, BATCH_SIZE
+        "[INIT] Reth adapter ready. db={:?} is_eth_mode={} BATCH_SIZE={}",
+        db_path, is_eth_mode, BATCH_SIZE
     );
 }
 
@@ -379,127 +370,3 @@ pub fn read_kv(task_list: Vec<parking_lot::RwLock<Option<SimpleTask>>>) {
     });
 }
 
-/// Generate the keccak256 hashed address for synthetic benchmark entry `num`.
-///
-/// Replicates the `fill_kv` key schedule from `TestGenV2`:
-///   k[12..20] = num (big-endian u64)
-///   hash       = sha256(k[12..20])
-///   k[0..12]   = hash[0..12] ^ hash[12..24]
-///   result     = keccak256(k[0..20])
-fn hashed_address_for_num(num: u64) -> B256 {
-    let mut k = [0u8; 20];
-    BigEndian::write_u64(&mut k[12..20], num);
-    let hash = entry_key_hash(&k[12..20]);
-    for i in 0..12 {
-        k[i] = hash[i] ^ hash[12 + i];
-    }
-    keccak256(Address::from_slice(&k[0..20]))
-}
-
-/// Pre-warm the OS page cache before the benchmark begins.
-///
-/// Two-phase approach:
-///
-///   Phase 1 – AccountsTrie sequential scan.
-///     Loads all trie-node pages in disk order. The trie is small relative to
-///     HashedAccounts, so sequential I/O is fine and guarantees full coverage.
-///
-///   Phase 2 – HashedAccounts proof-generation seeks (synthetic mode only).
-///     For every entry 0..entry_count, regenerates the keccak256 hashed address
-///     using the same key schedule as `fill_kv`, then does `seek_exact`.
-///     This mirrors the benchmark access pattern:
-///       * Root and upper B-tree nodes are traversed for every seek → stay hot.
-///       * Leaf pages are loaded once each, in benchmark-proportional distribution.
-///     Under memory pressure this outperforms sequential scan, which loads pages
-///     in disk order and can evict hot upper-level nodes before the benchmark
-///     even begins.
-///
-///   ETH replay mode falls back to sequential scan for both phases because the
-///   key schedule is unknown at warmup time.
-pub fn warmup_trie() {
-    let entry_count = WARMUP_ENTRY_COUNT.load(Ordering::Relaxed);
-    let eth_mode = IS_ETH_MODE.load(Ordering::Relaxed);
-
-    let guard = RETH_FACTORY.read();
-    let factory = guard.as_ref().unwrap();
-    let provider = factory.provider().expect("Failed to get provider for warmup");
-    let tx = provider.tx_ref();
-
-    println!(
-        "[WARMUP] Starting warmup: entry_count={} eth_mode={}",
-        entry_count, eth_mode
-    );
-    let t_start = std::time::Instant::now();
-
-    // Phase 1: HashedAccounts (KV data — much larger than trie).
-    // Load KV pages first so that under memory pressure the trie (Phase 2)
-    // is loaded last and stays hot when the benchmark begins.
-    let t1 = std::time::Instant::now();
-    let mut count_ha = 0usize;
-
-    if !eth_mode && entry_count > 0 {
-        // Synthetic mode: proof-generation seeks using regenerated keccak256 addresses.
-        // This mirrors the benchmark access pattern: upper B-tree nodes are traversed
-        // on every seek → stay hot; leaf pages loaded in benchmark-proportional distribution.
-        if let Ok(mut cursor) = tx.cursor_read::<tables::HashedAccounts>() {
-            for num in 0..entry_count {
-                let hashed_addr = hashed_address_for_num(num);
-                let _ = cursor.seek_exact(hashed_addr);
-                count_ha += 1;
-                if count_ha % 10_000_000 == 0 {
-                    println!(
-                        "[WARMUP] HashedAccounts progress: {}M / {}M in {:.2?}",
-                        count_ha / 1_000_000,
-                        entry_count / 1_000_000,
-                        t1.elapsed()
-                    );
-                }
-            }
-        }
-        println!("[WARMUP] HashedAccounts: {} seeks in {:.2?}", count_ha, t1.elapsed());
-    } else {
-        // ETH mode or entry_count unknown: fall back to sequential scan.
-        if let Ok(mut cursor) = tx.cursor_read::<tables::HashedAccounts>() {
-            loop {
-                match cursor.next() {
-                    Ok(Some(_)) => count_ha += 1,
-                    Ok(None) => break,
-                    Err(e) => {
-                        println!("[WARMUP] HashedAccounts cursor error after {} entries: {:?}", count_ha, e);
-                        break;
-                    }
-                }
-                if count_ha % 10_000_000 == 0 {
-                    println!("[WARMUP] HashedAccounts progress: {}M in {:.2?}", count_ha / 1_000_000, t1.elapsed());
-                }
-            }
-        }
-        println!("[WARMUP] HashedAccounts: {} entries (sequential scan) in {:.2?}", count_ha, t1.elapsed());
-    }
-
-    // Phase 2: AccountsTrie sequential scan.
-    // Loaded after KV so trie pages remain in cache when the benchmark starts.
-    let t2 = std::time::Instant::now();
-    let mut count_trie = 0usize;
-    if let Ok(mut cursor) = tx.cursor_read::<tables::AccountsTrie>() {
-        loop {
-            match cursor.next() {
-                Ok(Some(_)) => count_trie += 1,
-                Ok(None) => break,
-                Err(e) => {
-                    println!("[WARMUP] AccountsTrie cursor error after {} nodes: {:?}", count_trie, e);
-                    break;
-                }
-            }
-        }
-    }
-    println!("[WARMUP] AccountsTrie: {} nodes in {:.2?}", count_trie, t2.elapsed());
-
-    println!(
-        "[WARMUP] Complete in {:.2?}. HashedAccounts={} AccountsTrie={}",
-        t_start.elapsed(), count_ha, count_trie,
-    );
-
-    // Let OS readahead settle before benchmark starts.
-    std::thread::sleep(std::time::Duration::from_secs(10));
-}
