@@ -61,7 +61,7 @@ It contains:
 We recommend the machine used in the paper, AWS `c7gd.metal`:
 - **CPU:** 64-core Graviton3 at 2.6 GHz
 - **Memory:** 128 GiB DDR5
-- **Storage:** 2 × 1.7 TiB local NVMe in RAID-0, ext4 (NOMT alone needs 2.6 TiB at 1.5B entries)
+- **Storage:** 2 × 1.7 TiB local NVMe in RAID-0, ext4
 - **OS:** Ubuntu 24.04, Linux 6.17 (io_uring and cgroup v2)
 
 ### Software
@@ -91,6 +91,9 @@ cd QMDB-Benchmark
 
 ### 3.2 Storage
 
+These commands set up the two local NVMe drives of `c7gd.metal` (`/dev/nvme1n1`, `/dev/nvme2n1`) as a RAID-0 array
+mounted at `/mnt/ssd`.
+
 ```bash
 sudo mdadm --create /dev/md0 --level=0 --raid-devices=2 /dev/nvme1n1 /dev/nvme2n1
 sudo mkfs.ext4 -F /dev/md0
@@ -113,19 +116,12 @@ link incompatible versions of `zstd-sys`, so `bench/switch_backend.sh` swaps `be
 `Cargo.lock` between two variants before building (details in `bench/BACKEND_SWITCH.md`). Every build writes
 `./target/release/speed`, so copy each binary out.
 
-| Backend | Build (run from `bench/`) |
-|---|---|
-| QMDB | `./switch_backend.sh lvmt && cargo build --release --bin speed` |
-| QMDB, hybrid indexer | `./switch_backend.sh lvmt && cargo build --release --bin speed --features qmdb/use_hybridindexer` |
-| QMDB, pipelining off | `./switch_backend.sh lvmt && cargo build --release --bin speed --features qmdb/pipeline_off` |
-| NOMT | `./switch_backend.sh lvmt && cargo build --release --bin speed --features use_nomt` |
-| LVMT | `./switch_backend.sh lvmt && CXXFLAGS="-fpermissive -std=c++17 -include cstdint" cargo build --release --bin speed --features use_lvmt` |
-| Reth | `./switch_backend.sh reth && cargo build --release --bin speed --features use_reth` |
-
 ```bash
 mkdir -p ~/bin
 cd bench
 ./switch_backend.sh lvmt && cargo build --release --bin speed && cp ../target/release/speed ~/bin/speed_qmdb
+cargo build --release --bin speed --features qmdb/use_hybridindexer && cp ../target/release/speed ~/bin/speed_qmdb_hybrid
+cargo build --release --bin speed --features qmdb/pipeline_off && cp ../target/release/speed ~/bin/speed_qmdb_pipeoff
 cargo build --release --bin speed --features use_nomt && cp ../target/release/speed ~/bin/speed_nomt
 CXXFLAGS="-fpermissive -std=c++17 -include cstdint" \
   cargo build --release --bin speed --features use_lvmt && cp ../target/release/speed ~/bin/speed_lvmt
@@ -133,8 +129,10 @@ CXXFLAGS="-fpermissive -std=c++17 -include cstdint" \
 ./switch_backend.sh lvmt
 ```
 
-Optional checks: `ulimit -n 65535 && cargo test --release -p qmdb -p qmdb-common -p hpfile` (two qmdb tests fail with
-"Too many open files" under the default limit of 1,024).
+QMDB keeps many files open, more than the default limit of 1,024. Raise the limit with `ulimit -n 65535` in every shell
+that runs `speed` or the tests; under `systemd-run`, set it with `prlimit` inside the scope (Section 6.1).
+
+Unit tests (optional): `ulimit -n 65535 && cargo test --release -p qmdb -p qmdb-common -p hpfile`.
 
 ---
 
