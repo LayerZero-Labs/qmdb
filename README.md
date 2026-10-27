@@ -136,17 +136,18 @@ CXXFLAGS="-fpermissive -std=c++17 -include cstdint" \
 
 ## 4. Kick the tires
 
-These runs exercise every backend end to end on a small state (1–2 million entries). Run them from `bench/`, because
+These runs exercise every backend end to end on a small state (1 million entries). Run them from `bench/`, because
 the LVMT adapter keeps its public parameters in `../lvmt/pp`; LVMT generates them on its first run.
 
 ```bash
 cd bench
-ulimit -n 65535   # QMDB keeps more files open than the default limit of 1,024
+# QMDB keeps more files open than the default limit of 1,024
+ulimit -n 65535
 ARGS="--ops-per-block 100000 --rayon-threads 16 --randsrc-filename /mnt/ssd/randsrc.dat"
-export NOMT_BUCKETS=4000000   # NOMT preallocates 4 KiB of SSD per bucket: 16 GB here
-mkdir -p /mnt/ssd/qmdb_smoke
-~/bin/speed_qmdb --db-dir /mnt/ssd/qmdb_smoke --entry-count 2000000 --hover-interval 10 --hover-write-block 5 --hover-recreate-block 5 $ARGS
-for b in nomt lvmt reth; do
+# NOMT preallocates 4 KiB of SSD per bucket: 16 GB here
+export NOMT_BUCKETS=4000000
+# One run per backend: 1M entries, then 2-block Update, Read, Insert and Delete phases
+for b in qmdb nomt lvmt reth; do
   mkdir -p /mnt/ssd/${b}_smoke
   ~/bin/speed_$b --db-dir /mnt/ssd/${b}_smoke --entry-count 1000000 --hover-interval 5 --hover-write-block 2 --hover-recreate-block 2 $ARGS
 done
