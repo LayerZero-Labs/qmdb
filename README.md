@@ -306,6 +306,7 @@ Each system loads the InitDbBundle and replays the window; the result is the rep
 ```bash
 # from bench/; the same flags for speed_qmdb, speed_lvmt and speed_reth
 sudo systemd-run --scope -p MemoryMax=32G -p MemoryHigh=32G \
+  prlimit --nofile=1048576:1048576 taskset -c 0-63 \
   ~/bin/speed_nomt --db-dir /mnt/ssd/NOMT --entry-count 1500000000 --ops-per-block 100000 \
     --hover-write-block 0 --hover-recreate-block 0 --hover-interval 1000000 \
     --eth-trace-dir /mnt/ssd/real_eth_workload/kv_decompressed \
