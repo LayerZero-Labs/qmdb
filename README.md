@@ -119,20 +119,18 @@ link incompatible versions of `zstd-sys`, so `bench/switch_backend.sh` swaps `be
 ```bash
 mkdir -p ~/bin
 cd bench
+# QMDB, NOMT and LVMT build with the LVMT manifest
 ./switch_backend.sh lvmt && cargo build --release --bin speed && cp ../target/release/speed ~/bin/speed_qmdb
 cargo build --release --bin speed --features qmdb/use_hybridindexer && cp ../target/release/speed ~/bin/speed_qmdb_hybrid
 cargo build --release --bin speed --features qmdb/pipeline_off && cp ../target/release/speed ~/bin/speed_qmdb_pipeoff
 cargo build --release --bin speed --features use_nomt && cp ../target/release/speed ~/bin/speed_nomt
+# RocksDB in LVMT needs these flags with GCC >= 13
 CXXFLAGS="-fpermissive -std=c++17 -include cstdint" \
   cargo build --release --bin speed --features use_lvmt && cp ../target/release/speed ~/bin/speed_lvmt
+# Reth needs its own manifest; switch back afterwards
 ./switch_backend.sh reth && cargo build --release --bin speed --features use_reth && cp ../target/release/speed ~/bin/speed_reth
 ./switch_backend.sh lvmt
 ```
-
-QMDB keeps many files open, more than the default limit of 1,024. Raise the limit with `ulimit -n 65535` in every shell
-that runs `speed` or the tests; under `systemd-run`, set it with `prlimit` inside the scope (Section 6.1).
-
-Unit tests (optional): `ulimit -n 65535 && cargo test --release -p qmdb -p qmdb-common -p hpfile`.
 
 ---
 
@@ -143,7 +141,7 @@ the LVMT adapter keeps its public parameters in `../lvmt/pp`; LVMT generates the
 
 ```bash
 cd bench
-ulimit -n 65535
+ulimit -n 65535   # QMDB keeps more files open than the default limit of 1,024
 ARGS="--ops-per-block 100000 --rayon-threads 16 --randsrc-filename /mnt/ssd/randsrc.dat"
 export NOMT_BUCKETS=4000000   # NOMT preallocates 4 KiB of SSD per bucket: 16 GB here
 mkdir -p /mnt/ssd/qmdb_smoke
