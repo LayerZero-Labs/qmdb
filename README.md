@@ -158,25 +158,25 @@ Each run ends with the phase reports and a results summary. The QMDB run prints,
 for example (numbers will differ):
 
 ```
-Hover Test updates (200000 ops, 2 blocks, stride=random)...updates@1000000 entries: 200000 in 0.25s (797649.33/s), total: 400000 in 0.49s (812900.19/s)
+Hover Test updates (200000 ops, 2 blocks, stride=random)...updates@1000000 entries: 200000 in 0.26s (781397.95/s), total: 400000 in 0.50s (806517.80/s)
 ...
 TEST_REPORT: Phase=updates | Ops=200000
   > Total KV Size (Pure)  = 10400000 bytes (9.92 MB)
   [OS-level Disk IO]
-  > OS Physical Write = 25026560 bytes (23.87 MB)
-  > OS Physical Read  = 249856 bytes (0.24 MB)
+  > OS Physical Write = 25120768 bytes (23.96 MB)
+  > OS Physical Read  = 253952 bytes (0.24 MB)
 ...
-MEM(entries=1000000) Memory usage: physical=0.94GB virtual=10.51GB; physical/entry=1013.83bytes
-SSD(entries=1000000) Usage: 0.33GB, 0.34bytes/entry
+MEM(entries=1000000) Memory usage: physical=0.93GB virtual=10.53GB; physical/entry=996.09bytes
+SSD(entries=1000000) Usage: 0.33GB, 352.18bytes/entry
 ...
 Results summary
 	entry_count: 1000000
 	db_backend: QMDB
 	...
-	deletes: 798728.013/s
-	inserts: 926429.659/s
-	reads: 894015.088/s
-	updates: 797649.327/s
+	deletes: 766338.719/s
+	inserts: 772736.210/s
+	reads: 871625.182/s
+	updates: 781397.947/s
 ```
 
 A run is healthy if it prints `TEST_REPORT` lines for `updates`, `reads`, `inserts` and `deletes` and no `panicked` message.
