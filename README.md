@@ -263,7 +263,7 @@ for n in 100000000 300000000 600000000 900000000 1200000000 1500000000; do
   sudo systemd-run --scope -p MemoryMax=32G -p MemoryHigh=32G \
     prlimit --nofile=65535:65535 taskset -c 0-63 \
     ~/bin/speed_qmdb --db-dir /mnt/ssd/QMDB --entry-count $n --ops-per-block 100000 \
-      --hover-interval 30000 --rayon-threads 128 --randsrc-filename /mnt/ssd/randsrc.dat \
+      --hover-write-block 500 --hover-recreate-block 500 --hover-interval 30000 --rayon-threads 128 --randsrc-filename /mnt/ssd/randsrc.dat \
     2>&1 | tee qmdb_${n}.log
 done
 ```
@@ -303,8 +303,7 @@ the paper converts it to transactions per second with 17.91 state operations per
 
 ### 6.4 QMDB-only sweeps (Fig. 7, Fig. 9, Fig. 10)
 
-All at 1.5B entries, with the QMDB command of 6.2 (`--entry-count 1500000000`). The paper's runs for these figures
-used 500-block phases; add `--hover-write-block 500 --hover-recreate-block 500` to match.
+All at 1.5B entries, with the QMDB command of 6.2 (`--entry-count 1500000000`).
 
 | Figure | What varies | How |
 |---|---|---|
