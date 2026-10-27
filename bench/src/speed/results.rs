@@ -114,9 +114,9 @@ impl BenchmarkResults {
     }
 
     pub fn log_db_space_usage(&mut self) {
-        // Use du to get disk usage if available
+        // Use du to get disk usage if available; -k reports KiB
         let output = match std::process::Command::new("du")
-            .arg("-s")
+            .arg("-sk")
             .arg(self.db_dir.as_str())
             .output()
         {
@@ -140,7 +140,7 @@ impl BenchmarkResults {
             "SSD(entries={}) Usage: {:.2}GB, {:.2}bytes/entry",
             self.entries_in_db,
             usage as f64 / 1024.0 / 1024.0,
-            usage as f64 / self.entries_in_db as f64
+            usage as f64 * 1024.0 / self.entries_in_db as f64
         );
     }
 
