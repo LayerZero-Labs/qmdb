@@ -263,7 +263,8 @@ for n in 100000000 300000000 600000000 900000000 1200000000 1500000000; do
   sudo systemd-run --scope -p MemoryMax=32G -p MemoryHigh=32G \
     prlimit --nofile=65535:65535 taskset -c 0-63 \
     ~/bin/speed_qmdb --db-dir /mnt/ssd/QMDB --entry-count $n --ops-per-block 100000 \
-      --hover-write-block 500 --hover-recreate-block 500 --hover-interval 30000 --rayon-threads 128 --randsrc-filename /mnt/ssd/randsrc.dat \
+      --hover-write-block 500 --hover-recreate-block 500 --hover-interval 30000 \
+      --rayon-threads 128 --randsrc-filename /mnt/ssd/randsrc.dat \
     2>&1 | tee qmdb_${n}.log
 done
 ```
