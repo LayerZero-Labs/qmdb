@@ -18,7 +18,7 @@ use qmdb_common::task::task::Task;
 use qmdb::test_helper::SimpleTask;
 use qmdb_common::def::{OP_CREATE, OP_DELETE, OP_WRITE, OP_READ};
 
-// 1. 全局单例
+// 1. Global instance
 
 struct GlobalNomt {
     nomt: Nomt<Blake3Hasher>,
@@ -28,7 +28,7 @@ lazy_static! {
     static ref GLOBAL_NOMT: RwLock<Option<GlobalNomt>> = RwLock::new(None);
 }
 
-// 2. 初始化
+// 2. Initialization
 pub fn init(db_dir: &str) {
     let path = Path::new(db_dir);
     
@@ -56,7 +56,7 @@ pub fn init(db_dir: &str) {
     *global = Some(GlobalNomt { nomt });
 }
 
-// 3. 核心逻辑 (修复版)
+// 3. Block execution
 
 struct TaskExecutor<'a> {
     session: &'a Session<Blake3Hasher>,
@@ -72,17 +72,17 @@ impl<'a> TaskExecutor<'a> {
     }
 
     fn read(&mut self, key_path: KeyPath) -> Option<Vec<u8>> {
-        // 1. 先查当前 Chunk 的本地写缓存 (Read-your-own-writes)
+        // 1. Read our own writes from this chunk first
         if let Some(krw) = self.access.get(&key_path) {
             return krw.last_value().map(|v| v.to_vec());
         }
         
-        // 2. 缓存没有，直接从 NOMT Session 读
+        // 2. Otherwise read from the NOMT session
         let value = self.session.read(key_path).unwrap();
         
-        // 【关键修复】：纯读操作，直接返回即可。
-        // 绝对不要插入 self.access，也不需要记录 KeyReadWrite::Read
-        // 这将省去 90% 以上的内存开销和排序开销！
+        // Reads are not recorded in self.access as KeyReadWrite::Read:
+        // only written keys go to session.finish, which keeps
+        // the access set small and cheap to sort.
         value.map(|v| v.to_vec())
     }
 
@@ -96,7 +96,7 @@ impl<'a> TaskExecutor<'a> {
                 v.insert(KeyReadWrite::Write(val_vec));
             }
         }
-        // 对于真正发生修改的 Key，才做 warm_up 和 preserve
+        // Only written keys are warmed up
         self.session.warm_up(key_path);
         self.session.preserve_prior_value(key_path);
     }
@@ -131,7 +131,7 @@ pub fn execute_batch(_block_height: i64, task_list: Vec<RwLock<Option<SimpleTask
                                 OP_WRITE | OP_CREATE => executor.write(key_path, Some(value)),
                                 OP_DELETE => executor.write(key_path, None),
                                 OP_READ => { 
-                                    // 读操作现在非常轻量级，不会污染 HashMap
+                                    // reads are not recorded
                                     let _ = executor.read(key_path); 
                                 },
                                 _ => {}
@@ -144,8 +144,8 @@ pub fn execute_batch(_block_height: i64, task_list: Vec<RwLock<Option<SimpleTask
         })
         .collect();
 
-    // 2. 【关键修复】正确合并所有 Chunk 的结果，取代暴力的 flatten + dedup
-    // 这样做保证了后面的 Task 写入覆盖前面的，且不会发生并发数据丢失
+    // 2. Merge the chunks' access sets in task order
+    // so that a later task's write to a key overrides an earlier one
     let mut final_access: FxHashMap<KeyPath, KeyReadWrite> = FxHashMap::default();
     for chunk_access in results {
         for (k, v) in chunk_access {
@@ -154,7 +154,7 @@ pub fn execute_batch(_block_height: i64, task_list: Vec<RwLock<Option<SimpleTask
                     if let Some(val) = v.last_value() {
                         o.get_mut().write(Some(val.to_vec()));
                     } else {
-                        o.get_mut().write(None); // 对应 Delete
+                        o.get_mut().write(None); // delete
                     }
                 }
                 Entry::Vacant(vac) => {
@@ -166,12 +166,12 @@ pub fn execute_batch(_block_height: i64, task_list: Vec<RwLock<Option<SimpleTask
 
     let mut actual_access: Vec<_> = final_access.into_iter().collect();
 
-    // 如果该 Block 只有纯读，直接返回，避免 IO 和 Commit 损耗
+    // A block with only reads has nothing to commit
     if actual_access.is_empty() {
         return;
     }
 
-    // 3. Parallel Sort (现在数组变小了极多，排序速度会快几十倍)
+    // 3. Sort by key path in parallel
     actual_access.par_sort_unstable_by(|a, b| a.0.cmp(&b.0));
 
     let finished = session.finish(actual_access).unwrap();
@@ -179,7 +179,7 @@ pub fn execute_batch(_block_height: i64, task_list: Vec<RwLock<Option<SimpleTask
     finished.commit(nomt_ref).unwrap();
 }
 
-// 4. 接口适配 (统一调用 execute_batch)
+// 4. Backend interface (all writes go through execute_batch)
 
 pub fn create_kv(height: i64, task_list: Vec<RwLock<Option<SimpleTask>>>) {
     execute_batch(height, task_list);
@@ -197,8 +197,8 @@ pub fn read_kv(task_list: Vec<RwLock<Option<SimpleTask>>>) {
     let global_guard = GLOBAL_NOMT.read();
     let nomt_ref = &global_guard.as_ref().expect("Nomt not initialized").nomt;
 
-    // 1. 纯读模式下，不需要拆分 chunks，不需要 TaskExecutor，不需要 HashMap。
-    // 直接用 par_iter() 让 Rayon 全力并发压榨 CPU。
+    // Reads need no chunks, TaskExecutor or access set;
+    // they run in parallel with Rayon.
     task_list.par_iter().for_each(|task_lock| {
         let task_opt = task_lock.read();
         if let Some(task) = task_opt.as_ref() {
@@ -209,9 +209,9 @@ pub fn read_kv(task_list: Vec<RwLock<Option<SimpleTask>>>) {
                     h[0..len].copy_from_slice(&key_hash[0..len]);
                     let key_path = KeyPath::from(h);
 
-                    // 2. 直接从 NOMT 实例读取，完全绕过 Session 机制！
-                    // NOMT 提供了线程安全的同步直接读接口 read_sync。
-                    // 这样读不会被记录到任何读写集中，真正实现了 Zero-Overhead 并发读。
+                    // Read from the Nomt instance directly, without a session.
+                    // Nomt::read is thread-safe and synchronous,
+                    // and the read is not recorded in any access set.
                     let _val = nomt_ref.read(key_path).unwrap();
                 });
             }

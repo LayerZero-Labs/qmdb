@@ -883,7 +883,7 @@ impl AdsCore {
         let (task_sender, task_receiver) = channel::unbounded();
         self.task_sender = task_sender;
 
-        // [清理] 清空旧的 EntryFiles 引用
+        // Drop the old EntryFile references
         self.ext_entry_files.clear();
 
         for shard_id in 0..SHARD_COUNT {
@@ -945,7 +945,7 @@ impl AdsCore {
             self.indexer.clone(),
             Arc::new(ThreadPool::new(prefetcher_thread_count)),
             job_man,
-            self.prune_receiver.clone(), // <--- 传入 Receiver 
+            self.prune_receiver.clone(), // receiver of pruned segments
         ));
         self.prefetcher = Some(prefetcher.clone());
         if !self.bypass_prefetcher {

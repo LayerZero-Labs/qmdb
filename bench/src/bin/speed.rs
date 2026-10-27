@@ -169,23 +169,23 @@ fn main() {
             replay_end,
         );
     } else {
-        // 2. 计算 block/task/changeset 等常量
-        // 一个 changeset ≈ 10 个操作（典型为 9 写 + 1 删）
-        // 一个 task 包含 m 个 changeset
+        // 2. Block, task and change-set constants
+        // A change set holds about 10 operations (typically 9 writes and 1 delete)
+        // A task holds m change sets
         // ops_per_block = tasks_per_block * changesets_per_task * ops_per_changeset
         let ops_per_changeset = 10;
         let tasks_per_block = args.ops_per_block / (args.changesets_per_task * ops_per_changeset);
 
-        // task_id 编码规则：
-        // - 低 IN_BLOCK_IDX_BITS 位：task 在 block 内的局部索引
-        // - 高位：block height
-        // 此处检查 tasks_per_block 是否会导致 task_id 溢出
+        // task_id layout:
+        // - low IN_BLOCK_IDX_BITS bits: index of the task within its block
+        // - high bits: block height
+        // Check that tasks_per_block does not overflow task_id
         if tasks_per_block >= join_task_id(1, 0, false) as u64 {
             panic!("tasks_per_block {tasks_per_block} is too large");
         }
 
-        // 3. 检查数据库大小是否合理
-        // entry_count 必须是 ops_per_block 的整数倍，否则无法按 block 生成
+        // 3. Check the database size
+        // entry_count must be a multiple of ops_per_block so that it splits into whole blocks
         if args.entry_count % args.ops_per_block != 0 {
             panic!(
                 "entry_count {} is not divisible by ops_per_block {}",
@@ -193,10 +193,10 @@ fn main() {
             );
         }
 
-        // 数据库初始化阶段需要的 block 数
+        // Number of blocks needed to populate the database
         let blocks_for_db_population = args.entry_count / args.ops_per_block;
 
-        // 4. 打印 workload 配置并检查 hover 参数
+        // 4. Print the workload configuration and check the hover parameters
         println!("\n=================================");
         println!("!!! STARTING FROM AN EMPTY DB !!!");
         println!("=================================\n");
@@ -218,7 +218,7 @@ fn main() {
             args.hover.hover_interval * args.ops_per_block
         );
 
-        // hover 参数合法性检查
+        // Validate the hover parameters
         if args.hover.hover_interval > blocks_for_db_population {
             warn!(
                 "ERROR: hover_interval {} is greater than the number of blocks in a round {}; it will never run",
@@ -239,7 +239,7 @@ fn main() {
             );
         }
 
-        // 5. 创建 TestGen（生成 workload）
+        // 5. Create the TestGen that generates the workload
         let mut randsrc: RandSrc =
             RandSrc::new(args.randsrc_filename.as_str(), &format!("qmdb-{table_id}"));
         let mut test_gen_ = TestGenV2::new(
@@ -249,7 +249,7 @@ fn main() {
             tasks_per_block as usize,
         );
 
-        // 6. 运行 Benchmark
+        // 6. Run the benchmark
         run(
             RunConfig {
                 table_id,
@@ -289,7 +289,7 @@ fn run(config: RunConfig) {
     // Cumulative keys deleted across hover runs — drives delete stride_offset and insert num_offset.
     let mut total_deleted_keys: u64 = 0;
 
-    // 开始Population的Timestamp
+    // Start time of the population
     println!("Timestamp: {}", Utc::now().to_rfc3339());
     let start = Instant::now();
 
@@ -299,7 +299,7 @@ fn run(config: RunConfig) {
         // Every hover_write_block blocks, we time how long it takes to create the blocks
         // Height increases for every block added (here and in run_single_hover_block)
 
-        // 每10%输出一次进度
+        // Print progress every 10%
         if current_decile_print < (produced_blocks as f64 / blk_in_round as f64 * 10.0) as i64
             || produced_blocks == 0
             || produced_blocks == blk_in_round - 1
@@ -323,16 +323,16 @@ fn run(config: RunConfig) {
             current_decile_print = (produced_blocks as f64 / blk_in_round as f64 * 10.0) as i64;
         }
         
-        // 1. 生成population的block
+        // 1. Generate a population block
         let task_list = test_gen.gen_block();
 
-        // 2. 提交block至backend database
+        // 2. Submit the block to the backend database
         db_backend::create_kv(table_id, height, task_list);
         height += 1;
 
         results.update_entries_in_db((produced_blocks + 1) * test_gen.num_op_in_blk());
 
-        // 记录Population数据
+        // Record the population metrics
         // 1. Update the user interactively, time left, TPS -- based on time elapsed
         // 2. Log throughput every K blocks so that we can see the trend
         //    - Need to update the last value, and store a new value in a vector
@@ -353,11 +353,11 @@ fn run(config: RunConfig) {
             last_print = Instant::now();
         }
 
-        // 周期性运行Hover test
+        // Run the hover test periodically
         // We need to ensure that hover_recreate_block <= number of produced entries
         // Run delete/create/update/read benchmarks every hover_interval blocks (not on the first block)
         if (produced_blocks + 1) % hover_interval == 0 || produced_blocks == blk_in_round - 1 {
-            // Hover test 开始的时间
+            // Start time of the hover test
             thread::sleep(Duration::from_secs(60));
             println!("Timestamp: {}", Utc::now().to_rfc3339());
 
@@ -381,7 +381,7 @@ fn run(config: RunConfig) {
                 total_deleted_keys: &mut total_deleted_keys,
             });
 
-            // Hover test 结束的时间
+            // End time of the hover test
             println!("Timestamp: {}", Utc::now().to_rfc3339());
 
             hover_time_since_last_print += hover_start.elapsed();
@@ -416,7 +416,7 @@ fn run_hover_tasks(config: HoverTaskConfig) {
 
     let op_in_blk = test_gen.num_op_in_blk();
 
-    // 如果未population完成，就在当前数据库大小下测试，如果完成，就在整个数据库下测试
+    // Before population finishes, test at the current database size; afterwards, test on the whole database
     let max_num = if test_gen.cur_round == 0 {
         test_gen.cur_num
     } else {
@@ -664,11 +664,11 @@ fn hover_execute_op(config: HoverExecuteConfig) {
         None
     };
 
-    // 1. 输出当前的磁盘的信息
+    // 1. Print the current disk counters
     let (start_os_read, start_os_write) = get_linux_disk_rw_sectors(disk_monitor::monitor_disk()).unwrap_or((0, 0));
     println!("Timestamp (Start): {}", Utc::now().to_rfc3339());
 
-    // 2. 核心执行逻辑
+    // 2. Execute the phase
     let (tx, rx) = mpsc::sync_channel(10);
     let consumer_handle = thread::spawn(move || {
         while let Ok((blk_height, tasks)) = rx.recv() {
@@ -777,7 +777,7 @@ fn hover_execute_op(config: HoverExecuteConfig) {
     let phase_dur = bm_start.elapsed();
     results.record_throughput(operation_name, block_count * op_in_blk, phase_dur);
 
-    // 3. 输出当前的磁盘信息
+    // 3. Print the disk counters again
     println!("Timestamp (End): {}", Utc::now().to_rfc3339());
     thread::sleep(Duration::from_secs(60)); 
     let (end_os_read, end_os_write) = get_linux_disk_rw_sectors(disk_monitor::monitor_disk()).unwrap_or((0, 0));
@@ -922,7 +922,7 @@ fn run_single_hover_block(config: SingleHoverBlockConfig) -> Vec<RwLock<Option<S
                         OP_WRITE
                     }
                 } else if op_type == OP_READ && _i == 0 && is_qmdb {
-                    // 只有 QMDB 才强行塞一个 Write 进去
+                    // Only QMDB gets a forced Write here
                     OP_WRITE
                 } else {
                     op_type
@@ -958,13 +958,13 @@ fn run_eth_replay_mode(
 
     let mut global_db_height: i64 = 1;
 
-    // Phase 1: 将KV文件中的内容读取到内存，生成init db内存版本
+    // Phase 1: load the KV files into memory to build the initial database
     println!("\n=== Phase 1: Populating Base State ===");
     
     let (tx_p1, mut rx_p1) = tokio::sync::mpsc::channel(eth_replay::PREFETCH_BUFFER_BLOCKS);
     let source_clone_p1 = source.clone();
     
-    // 启动生产者，按区块顺序吐出 base_kv 和 ops
+    // Start the producer, which yields base_kv and ops in block order
     rt.spawn(async move {
         eth_replay::run_block_data_producer(start_height, end_height, source_clone_p1, tx_p1).await
     });
@@ -986,7 +986,7 @@ fn run_eth_replay_mode(
     let (init_db, boundary_ops) = splitter.into_parts();
     println!("init_db size: {}, boundary blocks: {}", init_db.len(), boundary_ops.len());
 
-    // Phase 2: 将init db内存版本populate到DB
+    // Phase 2: populate the database with the initial state
     let mut total_init_entries = 0;
     let ops_per_block = 100000;
     let ops_per_cset = 10;
@@ -1007,30 +1007,30 @@ fn run_eth_replay_mode(
         current_cset.add_op(OP_CREATE, &kh, &k, &v, None);
         total_init_entries += 1;
 
-        // 1. 检查 ChangeSet 是否已满 (达到 10 ops)
+        // 1. Is the change set full (10 ops)?
         if current_cset.op_list.len() >= ops_per_cset {
             current_cset.sort();
             current_cset_list.push(current_cset);
-            current_cset = ChangeSet::new(); // 重置当前 ChangeSet
+            current_cset = ChangeSet::new(); // start a new change set
 
-            // 2. 检查 Task 是否已满 (达到 2 csets)
+            // 2. Is the task full (2 change sets)?
             if current_cset_list.len() >= csets_per_task {
                 let task = SimpleTask::new(current_cset_list);
                 batch_tasks.push(parking_lot::RwLock::new(Some(task)));
-                current_cset_list = Vec::with_capacity(csets_per_task); // 重置当前 Task 的 cset 列表
+                current_cset_list = Vec::with_capacity(csets_per_task); // start a new task
 
-                // 3. 检查 Block 是否已满 (达到 5000 tasks，即 100,000 ops)
+                // 3. Is the block full (5,000 tasks, i.e. 100,000 ops)?
                 if batch_tasks.len() >= tasks_per_block {
                     db_backend::create_kv(table_id, global_db_height, batch_tasks);
                     global_db_height += 1;
-                    batch_tasks = Vec::with_capacity(tasks_per_block); // 重置当前 Block
+                    batch_tasks = Vec::with_capacity(tasks_per_block); // start a new block
                 }
             }
         }
     }
 
-    // --- 处理尾部残留的数据 (Flush Remaining) ---
-    // 凡是没有凑够整齐配置的尾部数据，都需要在循环结束后强制打包落盘
+    // --- Flush the remaining data ---
+    // Whatever did not fill a whole change set, task or block is packed and submitted after the loop
     
     if !current_cset.op_list.is_empty() {
         current_cset.sort();
@@ -1052,7 +1052,7 @@ fn run_eth_replay_mode(
     std::thread::sleep(Duration::from_secs(60));
     println!("Base State Population Complete.");
 
-    // Phase 3: Replaying Operations (Benchmark) - 官方模式适配
+    // Phase 3: replay the operations (benchmark), using the same structure as the hover test
     println!("\n=== Phase 2: Replaying Operations (Benchmark) ===");
     
     // === PRE-LOAD all replay ops into RAM before benchmark timer starts ===
@@ -1086,12 +1086,12 @@ fn run_eth_replay_mode(
     let bench_start = Instant::now();
     let total_blocks = replay_end - replay_start + 1;
 
-    // --- 新增参数：N 个 ETH block 打包成 1 个 DB Task 批次 ---
+    // --- N Ethereum blocks are packed into one database block ---
     let eth_blocks_per_db_block = 32; 
     let ops_per_cset = 10;            
     let csets_per_task = 2;           
 
-    // 2. 完全复刻官方 `hover_execute_op` 的消费者线程逻辑
+    // 2. Consumer thread, the same as in `hover_execute_op`
     let (db_tx, db_rx) = std::sync::mpsc::sync_channel(10);
     let consumer_handle = std::thread::spawn(move || {
         while let Ok((blk_height, tasks)) = db_rx.recv() {
@@ -1099,7 +1099,7 @@ fn run_eth_replay_mode(
         }
     });
 
-    // 3. 主线程：负责解析 ETH 数据，并按 `run_single_hover_block` 的结构拼装
+    // 3. The main thread parses the Ethereum data and packs it like `run_single_hover_block`
     let mut total_ops = 0;
     let mut processed_eth_blocks = 0;
     let mut interval_start = Instant::now();
@@ -1109,11 +1109,11 @@ fn run_eth_replay_mode(
     rt.block_on(async {
         let mut eth_block_counter = 0;
         
-        // 严格按照官方的三层结构预分配
+        // Same three levels as the hover test: block, task, change set
         let mut task_list: Vec<parking_lot::RwLock<Option<SimpleTask>>> = Vec::new();
         let mut cset_list: Vec<ChangeSet> = Vec::with_capacity(csets_per_task);
         let mut current_cset = ChangeSet::new();
-        let mut current_batch_keys: HashSet<Vec<u8>> = HashSet::new(); // 保留防冲突机制
+        let mut current_batch_keys: HashSet<Vec<u8>> = HashSet::new(); // keys already in the current change set
 
         for (h, ops_opt) in replay_blocks.into_iter() {
             let current_boundary_ops = boundary_ops.get(&h);
@@ -1128,7 +1128,7 @@ fn run_eth_replay_mode(
                     eth_replay::Operation::Read(k, v)   => (OP_READ, k, Some(v)), 
                 };
 
-                // 【切分逻辑 1】：防 Key 冲突 (真实 ETH 数据必须要有，否则会 Panic/错误)
+                // Split rule 1: a key may appear only once per change set (the Ethereum trace repeats keys, which would otherwise panic)
                 if current_batch_keys.contains(key_ref) {
                     current_cset.sort();
                     cset_list.push(std::mem::replace(&mut current_cset, ChangeSet::new()));
@@ -1148,7 +1148,7 @@ fn run_eth_replay_mode(
                 total_ops += 1;
                 interval_ops += 1;
 
-                // 【切分逻辑 2】：正常达到 10 ops 的阈值
+                // Split rule 2: the change set reached 10 ops
                 if current_cset.op_list.len() >= ops_per_cset {
                     current_cset.sort();
                     cset_list.push(std::mem::replace(&mut current_cset, ChangeSet::new()));
@@ -1161,7 +1161,7 @@ fn run_eth_replay_mode(
                 }
             };
 
-            // 执行操作装配
+            // Add the operations of this block
             if let Some(b_ops) = current_boundary_ops {
                 for op in b_ops { process_op(op); }
             }
@@ -1172,9 +1172,9 @@ fn run_eth_replay_mode(
             eth_block_counter += 1;
             processed_eth_blocks += 1;
 
-            // 【打包逻辑】：如果凑够了 N 个 ETH Block，则推入 DB 执行通道
+            // After N Ethereum blocks, send the batch to the database
             if eth_block_counter >= eth_blocks_per_db_block {
-                // 清理并压入最后没装满的 cset 和 task
+                // Push the last, partly filled change set and task
                 if !current_cset.op_list.is_empty() {
                     current_cset.sort();
                     cset_list.push(std::mem::replace(&mut current_cset, ChangeSet::new()));
@@ -1186,14 +1186,14 @@ fn run_eth_replay_mode(
                 }
 
                 if !task_list.is_empty() {
-                    // 发送给官方的 consumer 线程处理
+                    // Hand it to the consumer thread
                     db_tx.send((global_db_height as i64, std::mem::replace(&mut task_list, Vec::new()))).unwrap();
                     global_db_height += 1;
                 }
                 eth_block_counter = 0;
             }
 
-            // 保持原本的统计打印节奏
+            // Print progress at the usual interval
             if interval_start.elapsed().as_secs() >= 3 {
                 let elapsed = interval_start.elapsed().as_secs_f64();
                 let progress = (processed_eth_blocks as f64 / total_blocks as f64) * 100.0;
@@ -1203,7 +1203,7 @@ fn run_eth_replay_mode(
             }
         }
 
-        // 循环结束：处理尾部残余数据并发送
+        // After the loop, send the remaining data
         if !current_cset.op_list.is_empty() {
             current_cset.sort();
             cset_list.push(current_cset);
@@ -1217,7 +1217,7 @@ fn run_eth_replay_mode(
         }
     });
 
-    // 4. 等待队列处理完毕 (完全复刻官方行为)
+    // 4. Wait until the queue is drained, as in the hover test
     drop(db_tx); 
     consumer_handle.join().unwrap();
 
@@ -1383,7 +1383,7 @@ fn run_eth_replay_inner(
         InitDbSource::Mem { iter: Box::new(hm.into_iter()), boundary: bops }
     };
 
-    // Phase 2: 将init db内存版本populate到DB (streaming: pull one entry at a time
+    // Phase 2: populate the database with the initial state (streaming: pull one entry at a time
     // via src.next_entry() so the full init_db Vec is never held in memory)
     let mut total_init_entries = 0;
     let ops_per_block = 100000;
@@ -1405,30 +1405,30 @@ fn run_eth_replay_inner(
         current_cset.add_op(OP_CREATE, &kh, &k, &v, None);
         total_init_entries += 1;
 
-        // 1. 检查 ChangeSet 是否已满 (达到 10 ops)
+        // 1. Is the change set full (10 ops)?
         if current_cset.op_list.len() >= ops_per_cset {
             current_cset.sort();
             current_cset_list.push(current_cset);
-            current_cset = ChangeSet::new(); // 重置当前 ChangeSet
+            current_cset = ChangeSet::new(); // start a new change set
 
-            // 2. 检查 Task 是否已满 (达到 2 csets)
+            // 2. Is the task full (2 change sets)?
             if current_cset_list.len() >= csets_per_task {
                 let task = SimpleTask::new(current_cset_list);
                 batch_tasks.push(parking_lot::RwLock::new(Some(task)));
-                current_cset_list = Vec::with_capacity(csets_per_task); // 重置当前 Task 的 cset 列表
+                current_cset_list = Vec::with_capacity(csets_per_task); // start a new task
 
-                // 3. 检查 Block 是否已满 (达到 5000 tasks，即 100,000 ops)
+                // 3. Is the block full (5,000 tasks, i.e. 100,000 ops)?
                 if batch_tasks.len() >= tasks_per_block {
                     db_backend::create_kv(table_id, global_db_height, batch_tasks);
                     global_db_height += 1;
-                    batch_tasks = Vec::with_capacity(tasks_per_block); // 重置当前 Block
+                    batch_tasks = Vec::with_capacity(tasks_per_block); // start a new block
                 }
             }
         }
     }
 
-    // --- 处理尾部残留的数据 (Flush Remaining) ---
-    // 凡是没有凑够整齐配置的尾部数据，都需要在循环结束后强制打包落盘
+    // --- Flush the remaining data ---
+    // Whatever did not fill a whole change set, task or block is packed and submitted after the loop
     
     if !current_cset.op_list.is_empty() {
         current_cset.sort();
@@ -1461,7 +1461,7 @@ fn run_eth_replay_inner(
     println!("boundary_ops in replay range [{}, {}]: {} blocks retained",
         replay_start, replay_end, boundary_ops.len());
 
-    // Phase 3: Replaying Operations (Benchmark) - 官方模式适配
+    // Phase 3: replay the operations (benchmark), using the same structure as the hover test
     println!("\n=== Phase 2: Replaying Operations (Benchmark) ===");
     
     // === STREAMING mode: 50-block bounded channel ===
@@ -1484,12 +1484,12 @@ fn run_eth_replay_inner(
     let bench_start = Instant::now();
     let total_blocks = replay_end - replay_start + 1;
 
-    // --- 新增参数：N 个 ETH block 打包成 1 个 DB Task 批次 ---
+    // --- N Ethereum blocks are packed into one database block ---
     let eth_blocks_per_db_block = 32; 
     let ops_per_cset = 10;            
     let csets_per_task = 2;           
 
-    // 2. 完全复刻官方 `hover_execute_op` 的消费者线程逻辑
+    // 2. Consumer thread, the same as in `hover_execute_op`
     let (db_tx, db_rx) = std::sync::mpsc::sync_channel(10);
     let consumer_handle = std::thread::spawn(move || {
         while let Ok((blk_height, tasks)) = db_rx.recv() {
@@ -1497,7 +1497,7 @@ fn run_eth_replay_inner(
         }
     });
 
-    // 3. 主线程：负责解析 ETH 数据，并按 `run_single_hover_block` 的结构拼装
+    // 3. The main thread parses the Ethereum data and packs it like `run_single_hover_block`
     let mut total_ops = 0;
     let mut processed_eth_blocks = 0;
     let mut interval_start = Instant::now();
@@ -1507,11 +1507,11 @@ fn run_eth_replay_inner(
     rt.block_on(async {
         let mut eth_block_counter = 0;
         
-        // 严格按照官方的三层结构预分配
+        // Same three levels as the hover test: block, task, change set
         let mut task_list: Vec<parking_lot::RwLock<Option<SimpleTask>>> = Vec::new();
         let mut cset_list: Vec<ChangeSet> = Vec::with_capacity(csets_per_task);
         let mut current_cset = ChangeSet::new();
-        let mut current_batch_keys: HashSet<Vec<u8>> = HashSet::new(); // 保留防冲突机制
+        let mut current_batch_keys: HashSet<Vec<u8>> = HashSet::new(); // keys already in the current change set
 
         while let Some(msg) = rx_stream.recv().await {
             let (h, ops_opt) = msg.expect("streaming read failed");
@@ -1527,7 +1527,7 @@ fn run_eth_replay_inner(
                     eth_replay::Operation::Read(k, v)   => (OP_READ, k, Some(v)), 
                 };
 
-                // 【切分逻辑 1】：防 Key 冲突 (真实 ETH 数据必须要有，否则会 Panic/错误)
+                // Split rule 1: a key may appear only once per change set (the Ethereum trace repeats keys, which would otherwise panic)
                 if current_batch_keys.contains(key_ref) {
                     current_cset.sort();
                     cset_list.push(std::mem::replace(&mut current_cset, ChangeSet::new()));
@@ -1547,7 +1547,7 @@ fn run_eth_replay_inner(
                 total_ops += 1;
                 interval_ops += 1;
 
-                // 【切分逻辑 2】：正常达到 10 ops 的阈值
+                // Split rule 2: the change set reached 10 ops
                 if current_cset.op_list.len() >= ops_per_cset {
                     current_cset.sort();
                     cset_list.push(std::mem::replace(&mut current_cset, ChangeSet::new()));
@@ -1560,7 +1560,7 @@ fn run_eth_replay_inner(
                 }
             };
 
-            // 执行操作装配
+            // Add the operations of this block
             if let Some(b_ops) = current_boundary_ops {
                 for op in b_ops { process_op(op); }
             }
@@ -1571,9 +1571,9 @@ fn run_eth_replay_inner(
             eth_block_counter += 1;
             processed_eth_blocks += 1;
 
-            // 【打包逻辑】：如果凑够了 N 个 ETH Block，则推入 DB 执行通道
+            // After N Ethereum blocks, send the batch to the database
             if eth_block_counter >= eth_blocks_per_db_block {
-                // 清理并压入最后没装满的 cset 和 task
+                // Push the last, partly filled change set and task
                 if !current_cset.op_list.is_empty() {
                     current_cset.sort();
                     cset_list.push(std::mem::replace(&mut current_cset, ChangeSet::new()));
@@ -1585,14 +1585,14 @@ fn run_eth_replay_inner(
                 }
 
                 if !task_list.is_empty() {
-                    // 发送给官方的 consumer 线程处理
+                    // Hand it to the consumer thread
                     db_tx.send((global_db_height as i64, std::mem::replace(&mut task_list, Vec::new()))).unwrap();
                     global_db_height += 1;
                 }
                 eth_block_counter = 0;
             }
 
-            // 保持原本的统计打印节奏
+            // Print progress at the usual interval
             if interval_start.elapsed().as_secs() >= 3 {
                 let elapsed = interval_start.elapsed().as_secs_f64();
                 let progress = (processed_eth_blocks as f64 / total_blocks as f64) * 100.0;
@@ -1602,7 +1602,7 @@ fn run_eth_replay_inner(
             }
         }
 
-        // 循环结束：处理尾部残余数据并发送
+        // After the loop, send the remaining data
         if !current_cset.op_list.is_empty() {
             current_cset.sort();
             cset_list.push(current_cset);
@@ -1616,7 +1616,7 @@ fn run_eth_replay_inner(
         }
     });
 
-    // 4. 等待队列处理完毕 (完全复刻官方行为)
+    // 4. Wait until the queue is drained, as in the hover test
     drop(db_tx); 
     consumer_handle.join().unwrap();
 
@@ -1674,10 +1674,10 @@ fn get_linux_disk_rw_sectors(disk_name: &str) -> io::Result<(u64, u64)> {
     let content = fs::read_to_string("/proc/diskstats")?;
     for line in content.lines() {
         let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() > 9 { // 确保有足够字段
+        if parts.len() > 9 { // enough fields
             if parts[2] == disk_name {
                 let read_sectors = parts[5].parse::<u64>().unwrap_or(0);
-                // 第10个字段 (parts[9]) 通常是 sectors written
+                // The 10th field (parts[9]) is sectors written
                 let write_sectors = parts[9].parse::<u64>().unwrap_or(0);
                 return Ok((read_sectors, write_sectors));
             }

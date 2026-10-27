@@ -60,7 +60,7 @@ pub fn create_kv(table_id: usize, height: i64, task_list: Vec<RwLock<Option<Simp
 
 #[cfg(feature = "use_nomt")]
 pub fn update_kv(_: usize, height: i64, task_list: Vec<RwLock<Option<SimpleTask>>>) {
-    // update 和 create 在 NOMT 中通常都是通过 Session.write 处理
+    // NOMT handles update and create the same way, as writes
     crate::speed::nomt_adapter::update_kv(height, task_list);
 }
 

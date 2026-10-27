@@ -192,7 +192,7 @@ pub struct Flusher {
     max_kept_height: i64,
     /// Channel for signaling block completion
     end_block_chan: crossbeam::channel::Sender<Arc<MetaInfo>>,
-    /// [Added] 保存广播通道的发送端
+    /// Sender of the channel that notifies the prefetchers of pruned segments
     prune_sender: crossbeam::channel::Sender<PruneCmd>,
 }
 
@@ -221,7 +221,7 @@ impl Flusher {
         curr_height: i64,
         max_kept_height: i64,
         end_block_chan: crossbeam::channel::Sender<Arc<MetaInfo>>,
-        // [Added] 构造时传入 sender
+        // the sender is passed in at construction
         prune_sender: crossbeam::channel::Sender<PruneCmd>,
     ) -> Self {
         Self {

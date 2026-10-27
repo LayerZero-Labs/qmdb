@@ -1195,10 +1195,10 @@ impl JobManager {
                 let wait_nr = if !pending.is_empty() && !buf_free {
                     1 
                 } else if pending.is_empty() {
-                    // 确实没新任务了，我们可以稍微等批量完成，减少系统调用开销
+                    // No new work: wait for a batch of completions to save system calls
                     (in_flight / 2).clamp(MIN_WAIT, MAX_WAIT)
                 } else if pushed_any {
-                    // 刚塞了新任务进去，快速唤醒检查
+                    // Just submitted new work: wake up soon to check
                     MIN_WAIT
                 } else {
                     MIN_WAIT
