@@ -58,15 +58,11 @@ It contains:
 
 ### Hardware
 
-| | Paper | Full reproduction (minimum) | Kick the tires |
-|---|---|---|---|
-| Machine | AWS `c7gd.metal`: 64-core Graviton3 at 2.6 GHz, 128 GiB DDR5 | ≥ 32 cores, ≥ 64 GiB RAM | ≥ 8 cores, ≥ 16 GiB RAM |
-| Storage | 2 × 1.7 TiB local NVMe, RAID-0, ext4 | NVMe with ≥ 3 TiB free (NOMT alone needs 2.6 TiB at 1.5B entries) | 20 GB free |
-| OS | Ubuntu 24.04, Linux 6.17 | Linux with io_uring and cgroup v2 | same |
-| Cost | on-demand $2.903/h (us-east-1) | — | — |
-
-The paper also uses `r6gd.2xlarge` (8 vCPUs, 64 GiB, 1 × 474 GB NVMe; $0.461/h) for the entry-level results in Fig. 6,
-and `c6id.16xlarge` (x86, 64 vCPUs, 128 GiB, 2 × 1.9 TB NVMe in RAID-0) for the x86 comparison in §5.
+We recommend the machine used in the paper, AWS `c7gd.metal`:
+- **CPU:** 64-core Graviton3 at 2.6 GHz
+- **Memory:** 128 GiB DDR5
+- **Storage:** 2 × 1.7 TiB local NVMe in RAID-0, ext4 (NOMT alone needs 2.6 TiB at 1.5B entries)
+- **OS:** Ubuntu 24.04, Linux 6.17 (io_uring and cgroup v2)
 
 ### Software
 
