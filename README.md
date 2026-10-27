@@ -94,11 +94,11 @@ and `c6id.16xlarge` (x86, 64 vCPUs, 128 GiB, 2 × 1.9 TB NVMe in RAID-0) for the
 - Rust **1.94.0**, pinned by `rust-toolchain.toml` (rustup installs it on first build).
 - A C/C++ toolchain for the native dependencies (RocksDB in LVMT, MDBX in Reth, jemalloc): GCC/G++ ≥ 13, clang, cmake, pkg-config.
 - `sudo` (memory caps through `systemd-run`, dropping the page cache), systemd with cgroup v2.
-- `git` with submodule support, `mdadm` for the RAID-0 array, and `wget` for the Ethereum dataset.
+- `git` with submodule support, `mdadm` for the RAID-0 array, and `python3-venv` for the Hugging Face CLI that downloads the Ethereum dataset.
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y build-essential clang libclang-dev cmake pkg-config git mdadm wget
+sudo apt-get install -y build-essential clang libclang-dev cmake pkg-config git mdadm python3-venv
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 ```
 
@@ -230,16 +230,24 @@ The replay uses the state operations of Ethereum mainnet blocks 15,012,300 – 1
 `{height}_operation_kv.bin` (bincode). The initial state at block 15,012,300 is packed into an **InitDbBundle**
 that `speed` streams in before the replay starts.
 
-| Item | Size | Notes |
-|---|---|---|
-| Per-block operation files for the window | 265,397 files, 73 GiB | decompressed `{height}_operation_kv.bin` |
-| `init_db_bundle_15012300_20407400.bin` | 99,862,323,012 bytes, MD5 `db12ace49012e6d77a4f8e7db2ec78bf` | 63,830,024 initial entries |
+The dataset is hosted on Hugging Face at
+[usiie/qmdb-eth-replay](https://huggingface.co/datasets/usiie/qmdb-eth-replay):
 
-> **TODO(release):** add the download location of the operation files and the bundle, with SHA-256 checksums, and the
-> download commands.
+| File | Size | SHA-256 | Contents |
+|---|---|---|---|
+| `traces_op_300k.tar` | 77,031,680,000 bytes | `cfd54b95900d9847856e23a9dbf7f77cf904eb0a2791e6ea55da1b4ac4243f94` | 265,397 per-block `{height}_operation_kv.bin` files (73 GiB) |
+| `init_db_bundle_15012300_20407400.bin` | 99,862,323,012 bytes | `a31560b3353fdd9e94e9576bba3feaa5e6fcb98576abcebac2ff1e0553de92a3` | InitDbBundle, 63,830,024 initial entries |
 
-Put the operation files in one directory, for example `/mnt/ssd/real_eth_workload/kv_decompressed`, and the
-bundle in `/mnt/ssd/init_db_output/`.
+Download, verify and extract (≈ 260 GB of disk at the peak; `hf` comes with the `huggingface_hub` Python package,
+which on Ubuntu 24.04 goes into a virtual environment):
+```bash
+python3 -m venv ~/hfenv && ~/hfenv/bin/pip install -U huggingface_hub
+~/hfenv/bin/hf download usiie/qmdb-eth-replay --repo-type dataset --local-dir /mnt/ssd/init_db_output
+cd /mnt/ssd/init_db_output && sha256sum -c SHA256SUMS
+mkdir -p /mnt/ssd/real_eth_workload/kv_decompressed
+tar xf traces_op_300k.tar -C /mnt/ssd/real_eth_workload/kv_decompressed && rm traces_op_300k.tar
+```
+The commands in Section 7.3 expect these two paths.
 
 ---
 
