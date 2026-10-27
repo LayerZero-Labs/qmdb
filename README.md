@@ -232,18 +232,13 @@ that `speed` streams in before the replay starts.
 | Item | Size | Notes |
 |---|---|---|
 | Per-block operation files for the window | 265,397 files, 73 GiB | decompressed `{height}_operation_kv.bin` |
-| Source archives | 29 × `kv_<start>_<end>.tar.gz`, 10,000 blocks each | cover the window |
 | `init_db_bundle_15012300_20407400.bin` | 99,862,323,012 bytes, MD5 `db12ace49012e6d77a4f8e7db2ec78bf` | 63,830,024 initial entries |
 
 > **TODO(release):** add the download location of the archives and the bundle, with SHA-256 checksums, and the
 > download commands.
 
-**Data coverage.** Operation files exist for 265,397 of the 300,000 heights in the window. The last file is block
-15,296,492, the source archives stop after `kv_15292300_15302299`, and there are two larger gaps
-(15,134,067–15,140,444 and 15,208,881–15,211,819) plus single missing heights.
-
-Extract the archives into one directory (≈ 180 GB of disk while extracting), for example
-`/mnt/ssd/real_eth_workload/kv_decompressed`, and put the bundle in `/mnt/ssd/init_db_output/`.
+Put the operation files in one directory, for example `/mnt/ssd/real_eth_workload/kv_decompressed`, and the
+bundle in `/mnt/ssd/init_db_output/`.
 
 ---
 
