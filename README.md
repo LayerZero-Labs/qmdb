@@ -160,7 +160,8 @@ CXXFLAGS="-fpermissive -std=c++17 -include cstdint" \
 ./switch_backend.sh lvmt
 ```
 
-Optional checks: `cargo test --release -p qmdb -p qmdb-common -p hpfile`.
+Optional checks: `ulimit -n 65535 && cargo test --release -p qmdb -p qmdb-common -p hpfile` (two qmdb tests fail with
+"Too many open files" under the default limit of 1,024).
 
 ---
 
