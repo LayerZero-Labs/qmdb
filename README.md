@@ -114,7 +114,7 @@ head -c 10M </dev/urandom > /mnt/ssd/randsrc.dat
 The backend is selected at **compile time** by a Cargo feature; without a feature, `speed` runs QMDB. LVMT and Reth
 link incompatible versions of `zstd-sys`, so `bench/switch_backend.sh` swaps `bench/Cargo.toml` and the workspace
 `Cargo.lock` between two variants before building (details in `bench/BACKEND_SWITCH.md`). Every build writes
-`./target/release/speed`, so copy each binary out.
+`target/release/speed` at the repository root, so copy each binary out.
 
 ```bash
 mkdir -p ~/bin
@@ -141,7 +141,6 @@ These runs exercise every backend end to end on a small state (1 million entries
 the LVMT adapter keeps its public parameters in `../lvmt/pp`; LVMT generates them on its first run.
 
 ```bash
-cd bench
 # QMDB keeps more files open than the default limit of 1,024
 ulimit -n 65535
 ARGS="--ops-per-block 100000 --rayon-threads 16 --randsrc-filename /mnt/ssd/randsrc.dat"
@@ -238,7 +237,7 @@ The commands in Section 6.3 expect these two paths.
 - **Machine:** `c7gd.metal`; the RAID-0 array mounted at `/mnt/ssd`.
 - **Memory:** a 32 GiB cgroup-v2 cap (`MemoryMax=32G`, `MemoryHigh=32G`) that limits allocations and the page cache:
   `sudo systemd-run --scope -p MemoryMax=32G -p MemoryHigh=32G ...`.
-- **CPUs:** all 64 cores (the commands below pin them with `taskset -c 0-63`). File descriptors: ≥ 65,535 (1,048,576 for NOMT),
+- **CPUs:** all 64 cores (the commands below pin them with `taskset -c 0-63`). File descriptors: ≥ 65,535 (1,048,576 for NOMT and the Ethereum replay),
   set with `prlimit` inside the scope.
 - **Before each run:** delete the database directory and drop the page cache:
   `rm -rf /mnt/ssd/<db> && sync && echo 3 | sudo tee /proc/sys/vm/drop_caches`.
@@ -257,7 +256,6 @@ lines printed by the same runs.
 
 QMDB (from `bench/`):
 ```bash
-cd bench
 for n in 100000000 300000000 600000000 900000000 1200000000 1500000000; do
   rm -rf /mnt/ssd/QMDB && sync && echo 3 | sudo tee /proc/sys/vm/drop_caches >/dev/null
   sudo systemd-run --scope -p MemoryMax=32G -p MemoryHigh=32G \
@@ -269,7 +267,7 @@ for n in 100000000 300000000 600000000 900000000 1200000000 1500000000; do
 done
 ```
 
-Baselines (example: NOMT at 1.5B; replace the binary for LVMT and Reth):
+Baselines (from `bench/`; example: NOMT at 1.5B; replace the binary for LVMT and Reth):
 ```bash
 rm -rf /mnt/ssd/NOMT && sync && echo 3 | sudo tee /proc/sys/vm/drop_caches >/dev/null
 sudo systemd-run --scope -p MemoryMax=32G -p MemoryHigh=32G \
@@ -334,7 +332,7 @@ All results are printed to stdout.
 | `> OS Physical Write/Read = N bytes` | bytes the phase wrote and read on the device that holds `--db-dir` (from `/proc/diskstats`, whole RAID array; override the device with `--monitor-disk`) |
 | `<phase>@<entries> entries: N in Ts (X/s), total: ...` | throughput of one phase, and of all phases of that kind so far |
 | `MEM(entries=N) Memory usage: physical=X GB` | resident memory of the process after N entries |
-| `SSD(entries=N) Usage: X GB` | on-disk size of the database |
+| `SSD(entries=N) Usage: X GB, Y bytes/entry` | on-disk size of the database, total and per entry |
 | `CPU(entries=N) User time ... Utilization: X %` | CPU time used by the process and its average utilization |
 | `Results summary` … `<phase>: X/s` | throughput of the last phase of each kind, at the end of the run |
 | `Replay [x%] Block N \| TPS: ...` | Ethereum replay progress |
@@ -348,9 +346,9 @@ All results are printed to stdout.
 
 | System | Upstream | Commit | License | In this repository |
 |---|---|---|---|---|
-| NOMT | [thrumdev/nomt](https://github.com/thrumdev/nomt) | `5fa289a` (2025-12-07) | MIT or Apache-2.0 | `nomt/`, one patch |
+| NOMT | [thrumdev/nomt](https://github.com/thrumdev/nomt) | `5fa289a` (2025-12-07) | MIT OR Apache-2.0 | `nomt/`, one patch |
 | LVMT | [ChenxingLi/authenticated-storage-benchmarks](https://github.com/ChenxingLi/authenticated-storage-benchmarks) | `c22ff82` (2023-07-06) | see upstream | `lvmt/`, git submodule, unmodified |
-| Reth | [paradigmxyz/reth](https://github.com/paradigmxyz/reth) | `1ba631b` (2024-10-10) | MIT or Apache-2.0 | `reth/`, unmodified |
+| Reth | [paradigmxyz/reth](https://github.com/paradigmxyz/reth) | `1ba631b` (2024-10-10) | MIT OR Apache-2.0 | `reth/`, unmodified |
 
 - **NOMT patch (`nomt/nomt/src/beatree/leaf_cache.rs`):** `insert()` evicts least-recently-used leaves whenever the cache
   exceeds its capacity. Upstream trims the cache only after a sync, so leaves loaded by Reads between syncs grow it
