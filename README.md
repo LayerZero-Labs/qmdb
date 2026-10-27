@@ -184,14 +184,20 @@ Delete the smoke databases afterwards: `rm -rf /mnt/ssd/*_smoke`.
 
 ### 5.1 Synthetic CRUD workload
 
-`speed` first **populates** `--entry-count` entries in blocks of `--ops-per-block` operations (default 100,000).
-Every `--hover-interval` blocks it pauses population and runs **hover** phases that time Update and Read throughput;
-after population a final hover also times Insert and Delete. Each Update/Read phase is `--hover-write-block` blocks and
-each Insert/Delete phase is `--hover-recreate-block` blocks, so with 100,000 operations per block a value of 50 gives
-5M-operation phases and 500 gives 50M. Keys are uniform by default; `--hover-zipf-theta θ` draws them from a Zipfian
-distribution (0.99 is YCSB-style skew; θ > 1 is extreme skew). All randomness comes from `--randsrc-filename`.
+`speed` first **populates** the database block by block. Every `--hover-interval` blocks it pauses population and
+runs **hover** phases that time Update and Read throughput; after population a final hover also times Insert and Delete.
 
-`--entry-count` must be a multiple of `--ops-per-block`. All flags are documented in `bench/src/cli.rs`.
+| Flag | Meaning | Default |
+|---|---|---|
+| `--entry-count` | entries to populate; must be a multiple of `--ops-per-block` | 500,000,000 |
+| `--ops-per-block` | operations per block | 100,000 |
+| `--hover-interval` | blocks of population between hovers | 10,000 |
+| `--hover-write-block` | blocks in each Update and Read phase | 50 (5M operations) |
+| `--hover-recreate-block` | blocks in each Insert and Delete phase | 50 (5M operations) |
+| `--hover-zipf-theta` | key distribution: 0 is uniform, 0.99 is YCSB-style skew, above 1 is extreme skew; not exactly 1.0 | 0 |
+| `--randsrc-filename` | file of random bytes from which all workload randomness is drawn | `./randsrc.dat` |
+
+All flags are documented in `bench/src/cli.rs`.
 
 ### 5.2 Ethereum mainnet replay
 
