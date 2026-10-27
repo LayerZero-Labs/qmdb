@@ -2,7 +2,6 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![PVLDB Vol. 20](https://img.shields.io/badge/PVLDB-Vol.%2020-informational)
-<!-- TODO(release): add the Zenodo DOI badge of the tagged release, e.g. [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.XXXXXXX.svg)](https://doi.org/10.5281/zenodo.XXXXXXX) -->
 
 This repository is the artifact of the PVLDB paper *QMDB: Breaking the DRAM Barrier in Authenticated Data
 Structures* (Sijie Cui, Ziyue Qiu, Isaac Zhang, Ryan Zarick, Daniel Wong, Thomas Kim, Mignon Li, Kelvin Wong,
@@ -11,17 +10,14 @@ George Amvrosiadis; Carnegie Mellon University and LayerZero Labs).
 It contains:
 - the **QMDB engine** used in the paper's evaluation (`crates/`),
 - **`speed`**, a benchmark driver that runs QMDB and the three baselines (NOMT, LVMT, Reth) through one shared
-  workload generator, so all systems see the same operations (`bench/`),
-- the **vendored baselines** at the exact upstream commits we measured, plus two documented patches (`nomt/`, `lvmt/`, `reth/`),
-- the **Ethereum mainnet replay** tooling (`eth-replay-kv/`) and the sweep engine and hardware monitor used to run the experiments.
+  workload generator, so all systems see the same operations; it also replays the Ethereum mainnet trace (`bench/`),
+- the **baselines** at the exact upstream commits we measured: NOMT and Reth vendored, NOMT with one documented patch,
+  and LVMT as an unmodified git submodule (`nomt/`, `reth/`, `lvmt/`).
 
 The production implementation of QMDB is maintained at [LayerZero-Labs/qmdb](https://github.com/LayerZero-Labs/qmdb).
 [Section 9](#9-baselines-patches-and-differences-from-upstream) lists every difference between that code and the copy here.
 
-> **TODO(release):** This README is a pre-release draft. Search for `TODO(release)` and resolve every item before
-> tagging the release; the full list is in [Release checklist](#release-checklist).
-
-**Paper:** PVLDB 20(TODO(release)): TODO-TODO, 2027. doi:TODO(release) · Evaluated version: tag `TODO(release)` (commit `TODO(release)`)
+**Paper:** Proceedings of the VLDB Endowment, Vol. 20, 2027.
 
 ---
 
@@ -69,17 +65,11 @@ between systems and the trends across state sizes should hold on comparable hard
 ├── bench/                   benchmark driver `speed` and one adapter per backend
 │   ├── src/bin/speed.rs     populate -> CRUD "hover" phases -> optional Ethereum replay
 │   ├── src/cli.rs           every command-line flag
-│   ├── src/speed/           qmdb.rs, nomt_adapter.rs, lvmt_adapter.rs, reth_adapter.rs, mdbx.rs, generators, metrics
-│   └── Cargo.toml.{lvmt,reth}, switch_backend.sh    manifest switch between the LVMT and Reth builds (Section 4)
-├── eth-replay-kv/           Ethereum trace tools: gen-init-db, kv-op-counts, kv-analyze, kv-validate, ...
-├── nomt/  lvmt/  reth/      vendored baselines (upstream commits and patches in Section 9)
-├── run_bench.sh             sweep engine: memory cap, CPU pinning, cache dropping, monitoring, archived results
-├── systems/qmdb.sh          run_bench.sh plugin for QMDB (fixed args, compile-time knobs)
-├── monitor/                 hardware monitor (CPU, memory, disk) and plotting
-├── run_{qmdb,nomt,lvmt,reth}_benchmark.sh   per-system reference scripts (see Section 11 before using them)
-└── archive/                 retired code kept for reference; not compiled
+│   ├── src/speed/           qmdb.rs, nomt_adapter.rs, lvmt_adapter.rs, reth_adapter.rs, eth_replay.rs, generators, metrics
+│   └── Cargo.toml.{lvmt,reth}, Cargo.lock.{lvmt,reth}, switch_backend.sh   manifest switch between the LVMT and Reth builds (Section 4)
+├── nomt/  reth/             vendored baselines (upstream commits and the NOMT patch in Section 9)
+└── lvmt/                    git submodule: upstream LVMT, unmodified
 ```
-<!-- TODO(release): add analysis/ (log parsers, plot scripts, CSVs and the raw logs behind every figure) and update this tree. -->
 
 ---
 
@@ -99,25 +89,16 @@ and `c6id.16xlarge` (x86, 64 vCPUs, 128 GiB, 2 × 1.9 TB NVMe in RAID-0) for the
 
 > **Warning:** AWS instance-store NVMe drives are erased when the instance stops. Copy results off the machine before stopping it.
 
-To compare your array with ours, measure 4 KiB random-read IOPS and sequential-write bandwidth with `fio`:
-```bash
-sudo fio --name=randread --filename=/mnt/ssd/fio.test --size=64G --direct=1 --ioengine=io_uring \
-         --rw=randread --bs=4k --iodepth=64 --numjobs=16 --group_reporting --time_based --runtime=60
-sudo fio --name=seqwrite --filename=/mnt/ssd/fio.test --size=64G --direct=1 --ioengine=io_uring \
-         --rw=write --bs=1M --iodepth=16 --numjobs=4 --group_reporting --time_based --runtime=60
-```
-<!-- TODO(release): add the exact fio job files used for the paper's numbers (QMDB_Research/benchmark/aws_orchestration/fio_baseline.sh). -->
-
 ### Software
 
 - Rust **1.94.0**, pinned by `rust-toolchain.toml` (rustup installs it on first build).
 - A C/C++ toolchain for the native dependencies (RocksDB in LVMT, MDBX in Reth, jemalloc): GCC/G++ ≥ 13, clang, cmake, pkg-config.
 - `sudo` (memory caps through `systemd-run`, dropping the page cache), systemd with cgroup v2.
-- `numactl` on multi-socket machines; Python 3 with `venv` for the monitor plots; `wget` for the Ethereum traces.
+- `git` with submodule support, `mdadm` for the RAID-0 array, and `wget` for the Ethereum dataset.
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y build-essential clang libclang-dev cmake pkg-config numactl python3-venv mdadm fio wget
+sudo apt-get install -y build-essential clang libclang-dev cmake pkg-config git mdadm wget
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 ```
 
@@ -125,7 +106,15 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 
 ## 4. Setup and build
 
-### 4.1 Storage
+### 4.1 Source
+
+LVMT is a git submodule, so clone recursively (or run `git submodule update --init` in an existing clone):
+```bash
+git clone --recursive https://github.com/CMU-SijieC/QMDB-Benchmark.git
+cd QMDB-Benchmark
+```
+
+### 4.2 Storage
 
 > **Warning:** the commands below destroy all data on the listed devices. Check device names with `lsblk` first.
 
@@ -135,7 +124,7 @@ sudo mkfs.ext4 -F /dev/md0
 sudo mkdir -p /mnt/ssd && sudo mount /dev/md0 /mnt/ssd && sudo chown "$USER" /mnt/ssd
 ```
 
-### 4.2 Workload seed
+### 4.3 Workload seed
 
 The synthetic workload is generated deterministically from a file of random bytes. Use the **same file for every
 system** so that all of them see the same key stream.
@@ -144,16 +133,18 @@ system** so that all of them see the same key stream.
 head -c 10M </dev/urandom > /mnt/ssd/randsrc.dat
 ```
 
-### 4.3 Building the backends
+### 4.4 Building the backends
 
 The backend is selected at **compile time** by a Cargo feature; without a feature, `speed` runs QMDB. LVMT and Reth
-link incompatible versions of `zstd-sys`, so `bench/switch_backend.sh` swaps `bench/Cargo.toml` between two variants
-before building (details in `bench/BACKEND_SWITCH.md`). Every build writes `./target/release/speed`, so copy each binary out.
+link incompatible versions of `zstd-sys`, so `bench/switch_backend.sh` swaps `bench/Cargo.toml` and the workspace
+`Cargo.lock` between two variants before building (details in `bench/BACKEND_SWITCH.md`). Every build writes
+`./target/release/speed`, so copy each binary out.
 
 | Backend | Build (run from `bench/`) | Time on `c7gd.metal` |
 |---|---|---|
 | QMDB | `./switch_backend.sh lvmt && cargo build --release --bin speed` | ≈ 2 min |
 | QMDB, hybrid indexer | `./switch_backend.sh lvmt && cargo build --release --bin speed --features qmdb/use_hybridindexer` | ≈ 2 min |
+| QMDB, pipelining off | `./switch_backend.sh lvmt && cargo build --release --bin speed --features qmdb/pipeline_off` | ≈ 2 min |
 | NOMT | `./switch_backend.sh lvmt && cargo build --release --bin speed --features use_nomt` | ≈ 1 min |
 | LVMT | `./switch_backend.sh lvmt && CXXFLAGS="-fpermissive -std=c++17 -include cstdint" cargo build --release --bin speed --features use_lvmt` | ≈ 2 min |
 | Reth | `./switch_backend.sh reth && cargo build --release --bin speed --features use_reth` | ≈ 2 min |
@@ -169,15 +160,14 @@ CXXFLAGS="-fpermissive -std=c++17 -include cstdint" \
 ./switch_backend.sh lvmt
 ```
 
-Optional checks: `cargo test --release -p qmdb-common -p hpfile` passes as shipped.
-<!-- TODO(release): `cargo test -p qmdb` fails to compile until the Flusher unit test passes the prune_sender argument (one line); with that fix all 110 qmdb tests pass. -->
+Optional checks: `cargo test --release -p qmdb -p qmdb-common -p hpfile`.
 
 ---
 
 ## 5. Kick the tires (≈ 40 minutes)
 
 These runs exercise every backend end to end on a small state (1–2 million entries). Run them from `bench/`, because
-the LVMT adapter loads its precomputed parameters from `../lvmt/pp`.
+the LVMT adapter keeps its public parameters in `../lvmt/pp`; LVMT generates them on its first run (about two minutes).
 
 ```bash
 cd bench
@@ -192,7 +182,7 @@ for b in nomt lvmt reth; do
 done
 ```
 
-Each run takes about 10 minutes and ends with six phase reports and a metrics summary. The QMDB run prints,
+Each run takes about 10 minutes and ends with the phase reports and a results summary. The QMDB run prints,
 for example (numbers will differ):
 
 ```
@@ -201,12 +191,17 @@ TEST_REPORT: Phase=updates | Ops=500000
   > OS Physical Write = 288620544 bytes (275.25 MB)
   > OS Physical Read  = 2364030976 bytes (2254.52 MB)
 ...
-reads.throughput_per_sec: 1019287.822416104
-updates.throughput_per_sec: 1015923.7885833174
-inserts.throughput_per_sec: 560151.804006863
-deletes.throughput_per_sec: 244889.1479321942
 MEM(entries=2000000) Memory usage: physical=1.02GB virtual=11.06GB; physical/entry=547.45bytes
 SSD(entries=2000000) Usage: 0.49GB, 0.26bytes/entry
+...
+Results summary
+	entry_count: 2000000
+	db_backend: qmdb
+	...
+	deletes: 244889.148/s
+	inserts: 560151.804/s
+	reads: 1019287.822/s
+	updates: 1015923.789/s
 ```
 
 A run is healthy if it prints `TEST_REPORT` lines for `updates`, `reads`, `inserts` and `deletes` and no `panicked` message.
@@ -237,33 +232,18 @@ that `speed` streams in before the replay starts.
 | Item | Size | Notes |
 |---|---|---|
 | Per-block operation files for the window | 265,397 files, 73 GiB | decompressed `{height}_operation_kv.bin` |
-| Source archives | 518 × `kv_<start>_<end>.tar.gz`, 10,000 blocks each | public URL list: TODO(release) |
+| Source archives | 29 × `kv_<start>_<end>.tar.gz`, 10,000 blocks each | cover the window |
 | `init_db_bundle_15012300_20407400.bin` | 99,862,323,012 bytes, MD5 `db12ace49012e6d77a4f8e7db2ec78bf` | 63,830,024 initial entries |
 
-> **TODO(release):** publish the operation files and the bundle on an archival host (Zenodo allows up to 200 GB per
-> record on request; a Hugging Face dataset with a DOI is an alternative), add SHA-256 checksums, and add the trace URL
-> list (`ethblocks-kvcompressed-public.txt`) and the download script (`download_eth_workload.sh`) to this repository.
+> **TODO(release):** add the download location of the archives and the bundle, with SHA-256 checksums, and the
+> download commands.
 
 **Data coverage.** Operation files exist for 265,397 of the 300,000 heights in the window. The last file is block
 15,296,492, the source archives stop after `kv_15292300_15302299`, and there are two larger gaps
 (15,134,067–15,140,444 and 15,208,881–15,211,819) plus single missing heights.
-<!-- TODO(release): reconcile this with the paper's "300K blocks / 55.96M transactions" and the TPS conversion. -->
 
-Download and extract (≈ 180 GB of disk while extracting):
-```bash
-mkdir -p /mnt/ssd/real_eth_workload && cd /mnt/ssd/real_eth_workload
-# TODO(release): ship ethblocks-kvcompressed-public.txt and download_eth_workload.sh with the artifact
-./download_eth_workload.sh 32 29        # 32 parallel downloads, first 29 archives cover the window
-```
-
-Regenerating the bundle needs the base files of all 518 archives and took about 9 hours:
-```bash
-cd eth-replay-kv
-cargo run --release --bin gen-init-db -- --start-height 15012300 --end-height 20407400 \
-  --input /mnt/ssd/real_eth_workload/kv_decompressed \
-  --out-init-db /mnt/ssd/init_db_output/init_db_bundle_15012300_20407400.bin \
-  --out-analysis /mnt/ssd/init_db_output/workload_analysis.txt
-```
+Extract the archives into one directory (≈ 180 GB of disk while extracting), for example
+`/mnt/ssd/real_eth_workload/kv_decompressed`, and put the bundle in `/mnt/ssd/init_db_output/`.
 
 ---
 
@@ -272,19 +252,14 @@ cargo run --release --bin gen-init-db -- --start-height 15012300 --end-height 20
 ### 7.1 Measurement protocol
 
 - **Machine:** `c7gd.metal` unless noted; the RAID-0 array mounted at `/mnt/ssd`.
-- **Memory:** a 32 GiB cgroup-v2 cap (`MemoryMax=32G`, `MemoryHigh=32G`) that limits allocations and the page cache.
-  `run_bench.sh --mem 32G` applies it; for direct runs use `sudo systemd-run --scope -p MemoryMax=32G -p MemoryHigh=32G ...`.
-- **Before each run:** the database directory is deleted and the page cache dropped (`run_bench.sh` does both).
-- **CPUs:** all 64 cores (the baseline commands below pin them with `taskset -c 0-63`). File descriptors: `ulimit -n` ≥ 65535 (1,048,576 for NOMT).
+- **Memory:** a 32 GiB cgroup-v2 cap (`MemoryMax=32G`, `MemoryHigh=32G`) that limits allocations and the page cache:
+  `sudo systemd-run --scope -p MemoryMax=32G -p MemoryHigh=32G ...`.
+- **Before each run:** delete the database directory and drop the page cache:
+  `rm -rf /mnt/ssd/<db> && sync && echo 3 | sudo tee /proc/sys/vm/drop_caches`.
+- **CPUs:** all 64 cores (the commands below pin them with `taskset -c 0-63`). File descriptors: ≥ 65,535 (1,048,576 for NOMT),
+  set with `prlimit` inside the scope.
 - **Repetitions:** QMDB in Fig. 5 is the mean of 3 runs with the standard deviation as error bars; other points are single runs.
 - **QMDB configuration:** source defaults, i.e. 16 shards and compaction threshold 0.7 (`SHARD_COUNT`, `UTILIZATION_RATIO` in `crates/qmdb-common/src/def.rs`).
-
-> **TODO(release): known differences between this repository and the runs in the paper.** Resolve each, or state it here:
-> 1. **Read timing.** The July–September QMDB runs stopped the Read timer once outstanding prefetch reads had drained; this repository's `speed` stops it when `flush()` returns, with part of the phase's reads still in flight, so it reports higher Read throughput.
-> 2. **Phase size.** The paper states 50M operations per phase. Baselines used 500-block (50M) phases; the plotted QMDB means used 50-block (5M) phases, which is the default in `systems/qmdb.sh`.
-> 3. **Memory cap.** NOMT's and QMDB's `c7gd.metal` Ethereum replays and the runs for Figs. 7, 9 and 10 and the x86 comparison ran without the 32 GiB cap.
-> 4. **Missing experiment switches.** The read/write-ratio sweep, the pipelining-off ablation and the hybrid-indexer memory sweep used `HOVER_RW_RATIOS`, a `pipeline_off` feature and a `qmdbhybrid` plugin that are not in this repository yet.
-> 5. **Analysis scripts.** The log parsers, plot scripts and raw logs behind each figure are not in this repository yet.
 
 ### 7.2 Database-size sweep (Fig. 5 and Fig. 8)
 
@@ -298,20 +273,30 @@ lines printed by the same runs.
 | LVMT | RocksDB memory budget 2 GiB, 16 shards | 2.6–32 h | — |
 | Reth | default MDBX settings; 100M–600M only | 4.9 h, 23 h, 108 h | — |
 
-QMDB (runs every size in sequence and archives each under `results/QMDB/`):
+QMDB (from `bench/`):
 ```bash
-./run_bench.sh --system qmdb --mem 32G \
-  --sweep entry_count=100000000,300000000,600000000,900000000,1200000000,1500000000
+cd bench
+for n in 100000000 300000000 600000000 900000000 1200000000 1500000000; do
+  for r in 1 2 3; do
+    rm -rf /mnt/ssd/QMDB && sync && echo 3 | sudo tee /proc/sys/vm/drop_caches >/dev/null
+    sudo systemd-run --scope -p MemoryMax=32G -p MemoryHigh=32G \
+      prlimit --nofile=65535:65535 taskset -c 0-63 \
+      ~/bin/speed_qmdb --db-dir /mnt/ssd/QMDB --entry-count $n --ops-per-block 100000 \
+        --hover-interval 30000 --rayon-threads 128 --randsrc-filename /mnt/ssd/randsrc.dat \
+      2>&1 | tee qmdb_${n}_r${r}.log
+  done
+done
 ```
 
 Baselines (example: NOMT at 1.5B; replace the binary for LVMT and Reth):
 ```bash
 cd bench
+rm -rf /mnt/ssd/NOMT && sync && echo 3 | sudo tee /proc/sys/vm/drop_caches >/dev/null
 sudo systemd-run --scope -p MemoryMax=32G -p MemoryHigh=32G \
   env NOMT_BUCKETS=575546222 prlimit --nofile=1048576:1048576 taskset -c 0-63 \
-  ~/bin/speed_nomt --db-dir /mnt/ssd --entry-count 1500000000 --ops-per-block 100000 \
+  ~/bin/speed_nomt --db-dir /mnt/ssd/NOMT --entry-count 1500000000 --ops-per-block 100000 \
     --hover-write-block 500 --hover-recreate-block 500 --hover-interval 30000 \
-    --rayon-threads 64 --randsrc-filename /mnt/ssd/randsrc.dat --output-filename nomt_1500M.json \
+    --rayon-threads 64 --randsrc-filename /mnt/ssd/randsrc.dat \
   2>&1 | tee nomt_1500M.log
 ```
 NOMT reads its bucket count from `NOMT_BUCKETS` (values in the table above; the default is 575,546,222) and preallocates
@@ -323,18 +308,14 @@ NOMT reads its bucket count from `NOMT_BUCKETS` (values in the table above; the 
 Each system loads the InitDbBundle and replays the window; the result is the replay's wall-clock time.
 
 ```bash
-# QMDB through the sweep engine
-./run_bench.sh --system qmdb --mem 32G --workload eth --eth-trace-dir /mnt/ssd/real_eth_workload/kv_decompressed \
-  --extra "--init-db-path /mnt/ssd/init_db_output/init_db_bundle_15012300_20407400.bin --eth-replay-end-height 15312299"
-
-# Baselines (from bench/; same flags for speed_lvmt and speed_reth)
+# from bench/; the same flags for speed_qmdb, speed_lvmt and speed_reth
 sudo systemd-run --scope -p MemoryMax=32G -p MemoryHigh=32G \
-  ~/bin/speed_nomt --db-dir /mnt/ssd --entry-count 1500000000 --ops-per-block 100000 \
+  ~/bin/speed_nomt --db-dir /mnt/ssd/NOMT --entry-count 1500000000 --ops-per-block 100000 \
     --hover-write-block 0 --hover-recreate-block 0 --hover-interval 1000000 \
     --eth-trace-dir /mnt/ssd/real_eth_workload/kv_decompressed \
     --init-db-path /mnt/ssd/init_db_output/init_db_bundle_15012300_20407400.bin \
     --eth-replay-start-height 15012300 --eth-replay-end-height 15312299 \
-    --randsrc-filename /mnt/ssd/randsrc.dat --output-filename nomt_eth.json 2>&1 | tee nomt_eth.log
+    --randsrc-filename /mnt/ssd/randsrc.dat 2>&1 | tee nomt_eth.log
 ```
 
 The run ends with `Benchmark Finished.`, `Total Ops: N` and `Duration: Ts`. Throughput is N / T operations per second;
@@ -351,16 +332,24 @@ On `r6gd.2xlarge`, pin the run to the eight vCPUs (`taskset -c 0-7`) and use the
 
 ### 7.4 QMDB-only sweeps (Fig. 7, Fig. 9, Fig. 10)
 
-All at 1.5B entries. `run_bench.sh` rebuilds QMDB when a sweep changes a compile-time constant.
+All at 1.5B entries, with the QMDB command of 7.2 (`--entry-count 1500000000`). The paper's runs for these figures
+used 500-block phases; add `--hover-write-block 500 --hover-recreate-block 500` to match.
 
-| Figure | What varies | Command | Time per point |
+| Figure | What varies | How | Time per point |
 |---|---|---|---|
-| Fig. 7 | Zipfian θ = 0, 0.2, 0.4, 0.6, 0.8, 1.01, 1.2, 1.4, 1.5 | `./run_bench.sh --system qmdb --entry-count 1500000000 --sweep zipf=0,0.2,0.4,0.6,0.8,1.01,1.2,1.4,1.5` | ≈ 33 min |
-| Fig. 9 | compaction threshold 0.4 – 1.0 (`UTILIZATION_RATIO` 4–10) | `./run_bench.sh --system qmdb --entry-count 1500000000 --sweep ratio=4,5,6,7,8,9,10` | ≈ 38 min |
-| Fig. 10 | shards 1, 2, 4, 8, 16, 32 | `./run_bench.sh --system qmdb --entry-count 1500000000 --sweep shard=1,2,4,8,16,32` | 44–112 min |
+| Fig. 7 | Zipfian θ = 0, 0.2, 0.4, 0.6, 0.8, 1.01, 1.2, 1.4, 1.5 | `--hover-zipf-theta θ` | ≈ 33 min |
+| Fig. 9 | compaction threshold 0.4 – 1.0 | `UTILIZATION_RATIO` = 4 … 10 in `crates/qmdb-common/src/def.rs`, then rebuild | ≈ 38 min |
+| Fig. 10 | shards 1, 2, 4, 8, 16, 32 | `SHARD_COUNT` in `crates/qmdb-common/src/def.rs`, then rebuild | 44–112 min |
+| Fig. 10, pipelining off | shards as above | build with `--features qmdb/pipeline_off` (4.4) in addition to `SHARD_COUNT` | 44–112 min |
 
-The paper's runs for these figures used 500-block phases; add `--hover-write-block 500 --hover-recreate-block 500` to match.
-<!-- TODO(release): add the pipelining-off variant of Fig. 10 (pipeline_off feature + qmdb_nopipe plugin). -->
+The two compile-time constants can be set with `sed`; restore the defaults (7 and 16) afterwards:
+```bash
+sed -E -i 's/pub const UTILIZATION_RATIO: i64 = [0-9]+;/pub const UTILIZATION_RATIO: i64 = 4;/' crates/qmdb-common/src/def.rs
+sed -E -i 's/pub const SHARD_COUNT: usize = [0-9]+;/pub const SHARD_COUNT: usize = 1;/' crates/qmdb-common/src/def.rs
+```
+
+`pipeline_off` makes the engine wait until the previous block has finished before it starts the next one
+(pipeline depth 1).
 
 ### 7.5 Results stated in the text
 
@@ -368,35 +357,30 @@ The paper's runs for these figures used 500-block phases; add `--hover-write-blo
 |---|---|---|
 | x86 `c6id.16xlarge` within 1–2% of `c7gd.metal` | §5 setup | The QMDB 1.5B run of 7.2 on `c6id.16xlarge`, 3 runs |
 | Entry-level `r6gd.2xlarge` | §5.1, Fig. 6 | 7.3 on `r6gd.2xlarge` |
-| Read/Update mix: raising the Read fraction from 0 to 1 raises throughput by only about 8% | §5.1 | TODO(release): add the `HOVER_RW_RATIOS` sweep |
-| Hybrid indexer: 10.7 → 1.5 bytes per entry; throughput under 32 GiB and 8 GiB caps; queue depth | §6 | TODO(release): add the `qmdbhybrid` plugin; build with the hybrid indexer (4.3) and sweep `--mem` |
+| Read/Update mix: raising the Read fraction from 0 to 1 raises throughput by only about 8% | §5.1 | Run the QMDB 1.5B command of 7.2 with `env HOVER_RW_RATIOS=0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0` inside the scope. The final hover skips Insert and Delete and runs one mixed phase per ratio (each operation is a Read with that probability, otherwise an Update), reported as `rw_read00` … `rw_read10` |
+| Hybrid indexer: 10.7 → 1.5 bytes per entry; throughput under 32 GiB and 8 GiB caps; queue depth | §6 | Build with the hybrid indexer (4.4) and vary `MemoryMax`/`MemoryHigh` |
 | Recovery estimate | §6 | Analytical, from the 5 GB/s sequential read throughput of `c7gd.metal` |
-
-### 7.6 Parsing and plotting
-
-<!-- TODO(release): add analysis/ with the parsers (QMDB_Research/results/parsers), the plot scripts (results/plots,
-common.py and the Linux Libertine fonts), the CSVs and the raw logs, so that `make plots` rebuilds every figure from
-the archived logs without rerunning experiments. -->
-Until the analysis scripts are added, the numbers can be read directly from the logs (Section 8).
 
 ---
 
 ## 8. Output and metrics
 
+All results are printed to stdout.
+
 | Output | Meaning |
 |---|---|
 | `TEST_REPORT: Phase=<phase> \| Ops=<n>` | one hover phase (`updates`, `reads`, `inserts`, `deletes`) finished |
-| `> OS Physical Write/Read = N bytes` | bytes the phase wrote and read on the device that holds `--db-dir` (from `/proc/diskstats`, whole RAID array) |
-| `<phase>.throughput_per_sec: X` | operations per second of the phase |
+| `> OS Physical Write/Read = N bytes` | bytes the phase wrote and read on the device that holds `--db-dir` (from `/proc/diskstats`, whole RAID array; override the device with `--monitor-disk`) |
+| `<phase>@<entries> entries: N in Ts (X/s), total: ...` | throughput of one phase, and of all phases of that kind so far |
 | `MEM(entries=N) Memory usage: physical=X GB` | resident memory of the process after N entries |
 | `SSD(entries=N) Usage: X GB` | on-disk size of the database |
 | `CPU(entries=N) User time ... Utilization: X %` | CPU time used by the process and its average utilization |
+| `Results summary` … `<phase>: X/s` | throughput of the last phase of each kind, at the end of the run |
 | `Replay [x%] Block N \| TPS: ...` | Ethereum replay progress |
 | `Benchmark Finished.`, `Total Ops: N`, `Duration: Ts` | end of an Ethereum replay |
 
-`--output-filename` writes the same metrics as JSON, and `--result-log <file>` appends the key lines to a file.
-`run_bench.sh` archives each run in `results/<SYSTEM>/<UMA|NUMA>/<tag>_<timestamp>/` with `benchmark_output.log`,
-`hardware_usage.csv` (CPU, memory and disk sampled every 5 s by `monitor/hwmonitor.sh`) and the monitor plots.
+QMDB's Read phases stop their timer at the prefetcher's last SSD read (no new read for 40 ms), not when `flush()`
+returns: the updater treats Reads as no-ops, so `flush()` returns while the io_uring prefetcher is still reading.
 
 ---
 
@@ -405,25 +389,19 @@ Until the analysis scripts are added, the numbers can be read directly from the 
 | System | Upstream | Commit | License | In this repository |
 |---|---|---|---|---|
 | NOMT | [thrumdev/nomt](https://github.com/thrumdev/nomt) | `5fa289a` (2025-12-07) | MIT or Apache-2.0 | `nomt/`, one patch |
-| LVMT | [ChenxingLi/authenticated-storage-benchmarks](https://github.com/ChenxingLi/authenticated-storage-benchmarks) | `c22ff82` (2023-07-06) | see below | `lvmt/`, one patch, plus `lvmt/pp/` (100 MB of precomputed AMT parameters) |
+| LVMT | [ChenxingLi/authenticated-storage-benchmarks](https://github.com/ChenxingLi/authenticated-storage-benchmarks) | `c22ff82` (2023-07-06) | see upstream | `lvmt/`, git submodule, unmodified |
 | Reth | [paradigmxyz/reth](https://github.com/paradigmxyz/reth) | `1ba631b` (2024-10-10) | MIT or Apache-2.0 | `reth/`, unmodified |
 
-Each vendored tree is identical to its upstream commit except for LVMT's `pp/` parameters, Reth's
-`book/cli/reth/debug/` documentation (excluded by `.gitignore`), and these two patches:
+`nomt/` and `reth/` are identical to their upstream commits except for Reth's `book/cli/reth/debug/` documentation
+(excluded by `.gitignore`) and one patch:
 - **NOMT, `nomt/nomt/src/beatree/leaf_cache.rs`:** `insert()` evicts least-recently-used leaves whenever the cache
   exceeds its capacity. Upstream trims the cache only after a sync, so leaves loaded by Reads between syncs grow it
   without bound and exceed the memory cap. The patch changes caching only, not values or roots.
-- **LVMT, `lvmt/asb-authdb/lvmt-db/src/lvmt_db.rs`:** `commit()` keeps only the last write per key within an epoch.
-  Without it, upstream panics when one key is written many times in an epoch, which the Ethereum trace does. The
-  patch performs one authenticated update per distinct key per epoch, which reduces LVMT's work.
 
-The NOMT adapter likewise applies one write per key per block. The harness builds only `nomt/nomt`, `nomt/core`,
-`lvmt/asb-authdb/lvmt-db` and `lvmt/asb-backend/cfx-kvdb-rocksdb`.
-
-> **TODO(release): LVMT licensing.** The LVMT crates written by its authors (`lvmt-db`, `asb-*`, `authdb-trait`, …) carry
-> no license, and the Parity-derived crates are GPL-3.0 (`cfx-kvdb-rocksdb`, `parity-journaldb`, `patricia-trie-ethereum`)
-> or Apache-2.0 (`memory-db`). Either obtain permission from the LVMT authors, or replace `lvmt/` with a script that
-> fetches commit `c22ff82` and applies the one-hunk patch.
+The adapters apply one write per key per block: when a block writes a key several times, NOMT and LVMT receive only
+the last write (LVMT's upstream code panics when one key is written many times in an epoch, which the Ethereum trace
+does). The harness builds only `nomt/nomt`, `nomt/core`, `lvmt/asb-authdb/lvmt-db` and
+`lvmt/asb-backend/cfx-kvdb-rocksdb`.
 
 **QMDB here vs LayerZero-Labs/qmdb `f14a2a0`.** The engine in `crates/` differs from the public code in:
 - prefetcher job pool of 40,000 jobs instead of 4,000 (`crates/qmdb/src/prefetcher/mod.rs`);
@@ -431,6 +409,7 @@ The NOMT adapter likewise applies one write per key per block. The harness build
   instead of up to 32 (`crates/qmdb/src/prefetcher/dioprefetcher.rs`);
 - pruned entry-file segments are released from the io_uring registered-file tables, so their disk space is freed
   (`PruneCmd` from the flusher to the prefetcher workers);
+- the `pipeline_off` feature for the pipelining ablation (off by default);
 - debug instrumentation, commented-out code and LayerZero's RocksDB reference-model fuzz example were removed.
 The first two change performance only; none of the changes affects Merkle roots, proofs or durability.
 
@@ -451,11 +430,10 @@ pub fn flush();
 
 Each task holds change sets; iterate them with `for_each_op(|op_type, _shard, key_hash, key, value, _old, _rec| ...)`
 and dispatch on `OP_CREATE`, `OP_WRITE`, `OP_DELETE` and `OP_READ` from `qmdb_common::def`. To add a system:
-1. write `bench/src/speed/<sys>_adapter.rs` (`mdbx.rs` is the simplest template, `nomt_adapter.rs` for a Merkle trie);
+1. write `bench/src/speed/<sys>_adapter.rs` (`nomt_adapter.rs` is a template for a Merkle trie);
 2. register it in `bench/src/speed/mod.rs` under `#[cfg(feature = "use_<sys>")]`;
 3. add a `NAME` constant and the six wrappers to `bench/src/speed/db_backend.rs`;
-4. add the feature and a path dependency to `bench/Cargo.toml` (and to `Cargo.toml.lvmt`/`.reth` if native libraries clash);
-5. add `systems/<sys>.sh` so that `run_bench.sh --system <sys>` can drive it.
+4. add the feature and a path dependency to `bench/Cargo.toml` (and to `Cargo.toml.lvmt`/`.reth` if native libraries clash).
 
 ---
 
@@ -463,16 +441,12 @@ and dispatch on `OP_CREATE`, `OP_WRITE`, `OP_DELETE` and `OP_READ` from `qmdb_co
 
 - **`Too many open files`:** raise the limit (`ulimit -n 65535`). Under `systemd-run`, set it inside the scope
   (`prlimit --nofile=...`); `-p LimitNOFILE` is rejected for scopes.
+- **`lvmt/` is empty:** the submodule was not fetched; run `git submodule update --init`.
 - **LVMT fails to build:** set `CXXFLAGS="-fpermissive -std=c++17 -include cstdint"` (RocksDB with GCC ≥ 13).
 - **LVMT cannot find its parameters:** run `speed_lvmt` from `bench/` so that `../lvmt/pp` resolves.
 - **Cargo resolution error mentioning `links = "zstd"`:** run `bench/switch_backend.sh lvmt` or `reth` before building.
 - **Panic at start-up:** `--entry-count` must be a multiple of `--ops-per-block`.
-- **Known build failures:** the MDBX backend (`use_mdbx`), the bench feature `qmdb_bench_correctness` and the QMDB
-  feature `tee_cipher` do not compile; none of them is used in the paper.
-- **`run_{qmdb,nomt,lvmt,reth}_benchmark.sh`** are the reference scripts from our cluster and are not ready to use as is:
-  they pass `--tps-blocks`, which `speed` no longer accepts (it exits with a usage error), and three of them source a
-  monitor library from an absolute path and pin CPUs for one of our lab machines. Use `run_bench.sh` or the commands in Section 7.
-  <!-- TODO(release): fix or remove these scripts. -->
+- **Known build failure:** the QMDB feature `tee_cipher` does not compile; it is not used in the paper.
 
 ---
 
@@ -483,10 +457,7 @@ and dispatch on `OP_CREATE`, `OP_WRITE`, `OP_DELETE` and `OP_READ` from `qmdb_co
 | repository root (`LICENSE`) | MIT | as in LayerZero-Labs/qmdb |
 | `crates/` | MIT OR Apache-2.0 | QMDB engine from LayerZero-Labs/qmdb, with the changes in Section 9 |
 | `bench/` | Apache-2.0 (`bench/LICENSE`) | benchmark driver from LayerZero-Labs/qmdb, extended with the baseline adapters |
-| `nomt/`, `lvmt/`, `reth/` | their own licenses | Section 9 |
-
-<!-- TODO(release): the root LICENSE keeps the upstream copyright line "Copyright (c) 2026 Research"; add the copyright of
-our own additions (CMU authors), a NOTICE crediting LayerZero Labs, THIRD_PARTY_NOTICES for the baselines, and CITATION.cff. -->
+| `nomt/`, `reth/`, `lvmt/` | their own licenses | Section 9 |
 
 ```bibtex
 @article{cui2027qmdb,
@@ -494,27 +465,8 @@ our own additions (CMU authors), a NOTICE crediting LayerZero Labs, THIRD_PARTY_
   title   = {{QMDB}: Breaking the {DRAM} Barrier in Authenticated Data Structures},
   journal = {Proceedings of the VLDB Endowment},
   volume  = {20},
-  number  = {TODO},
-  pages   = {TODO},
-  year    = {2027},
-  doi     = {TODO}
+  year    = {2027}
 }
 ```
 
 Questions and problems: please open a GitHub issue.
-
----
-
-## Release checklist
-
-<!-- Remove this section before tagging the release. -->
-- [ ] Merge the measurement harness used for the paper's July–September runs (read-drain timing, `HOVER_RW_RATIOS`,
-      `pipeline_off`, `qmdbhybrid` and `qmdb_nopipe` plugins) or document every difference in 7.1.
-- [ ] Resolve the LVMT licensing question (Section 9).
-- [ ] Publish the Ethereum operation files and the InitDbBundle with checksums on an archival host; add the URL list and download script.
-- [ ] Reconcile the Ethereum window's data coverage with the paper's block and transaction counts.
-- [ ] Add `analysis/` (parsers, plot scripts, CSVs, raw logs) and fill in 7.6.
-- [ ] Fix or remove `run_{qmdb,nomt,lvmt,reth}_benchmark.sh`; fix the Flusher unit test.
-- [ ] Remove tracked macOS `._*` files and `monitor/__pycache__`.
-- [ ] Add copyright for our additions, a NOTICE crediting LayerZero Labs, THIRD_PARTY_NOTICES and CITATION.cff.
-- [ ] Fill in DOI, pages, tag and commit; archive the tagged release on Zenodo and add the DOI badge.
