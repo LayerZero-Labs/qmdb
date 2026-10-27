@@ -235,7 +235,7 @@ that `speed` streams in before the replay starts.
 | Per-block operation files for the window | 265,397 files, 73 GiB | decompressed `{height}_operation_kv.bin` |
 | `init_db_bundle_15012300_20407400.bin` | 99,862,323,012 bytes, MD5 `db12ace49012e6d77a4f8e7db2ec78bf` | 63,830,024 initial entries |
 
-> **TODO(release):** add the download location of the archives and the bundle, with SHA-256 checksums, and the
+> **TODO(release):** add the download location of the operation files and the bundle, with SHA-256 checksums, and the
 > download commands.
 
 Put the operation files in one directory, for example `/mnt/ssd/real_eth_workload/kv_decompressed`, and the
