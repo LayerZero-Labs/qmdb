@@ -12,7 +12,7 @@ It contains:
   workload generator, so all systems see the same operations; it also replays the Ethereum mainnet trace (`bench/`),
 - the **QMDB engine** used in the paper's evaluation (`crates/`); the production implementation is maintained at
   [LayerZero-Labs/qmdb](https://github.com/LayerZero-Labs/qmdb), and
-  [Section 8](#8-baselines-patches-and-differences-from-upstream) lists every difference between that code and the copy here,
+  [Section 8.2](#82-qmdb) lists every difference between that code and the copy here,
 - the **baselines** at the exact upstream commits we measured: NOMT and Reth vendored, NOMT with one documented patch,
   and LVMT as an unmodified git submodule (`nomt/`, `reth/`, `lvmt/`).
 
@@ -28,7 +28,7 @@ It contains:
 5. [Workloads and datasets](#5-workloads-and-datasets)
 6. [Reproducing the paper's results](#6-reproducing-the-papers-results)
 7. [Output and metrics](#7-output-and-metrics)
-8. [Baselines, patches and differences from upstream](#8-baselines-patches-and-differences-from-upstream)
+8. [Differences from upstream](#8-differences-from-upstream)
 9. [Extending the harness](#9-extending-the-harness)
 10. [Troubleshooting](#10-troubleshooting)
 11. [License and citation](#11-license-and-citation)
@@ -48,7 +48,7 @@ It contains:
 │   ├── src/cli.rs           every command-line flag
 │   ├── src/speed/           qmdb.rs, nomt_adapter.rs, lvmt_adapter.rs, reth_adapter.rs, eth_replay.rs, generators, metrics
 │   └── Cargo.toml.{lvmt,reth}, Cargo.lock.{lvmt,reth}, switch_backend.sh   manifest switch between the LVMT and Reth builds (Section 3)
-├── nomt/  reth/             vendored baselines (upstream commits and the NOMT patch in Section 8)
+├── nomt/  reth/             vendored baselines (upstream commits and the NOMT patch in Section 8.1)
 └── lvmt/                    git submodule: upstream LVMT, unmodified
 ```
 
@@ -237,15 +237,10 @@ The commands in Section 6.3 expect these two paths.
 - **Machine:** `c7gd.metal` unless noted; the RAID-0 array mounted at `/mnt/ssd`.
 - **Memory:** a 32 GiB cgroup-v2 cap (`MemoryMax=32G`, `MemoryHigh=32G`) that limits allocations and the page cache:
   `sudo systemd-run --scope -p MemoryMax=32G -p MemoryHigh=32G ...`.
-- **Before each run:** delete the database directory and drop the page cache:
-  `rm -rf /mnt/ssd/<db> && sync && echo 3 | sudo tee /proc/sys/vm/drop_caches`.
 - **CPUs:** all 64 cores (the commands below pin them with `taskset -c 0-63`). File descriptors: ≥ 65,535 (1,048,576 for NOMT),
   set with `prlimit` inside the scope.
-- **Repetitions:** QMDB in Fig. 5 is the mean of 3 runs with the standard deviation as error bars; other points are single runs.
-- **QMDB configuration:** source defaults, i.e. 16 shards and compaction threshold 0.7 (`SHARD_COUNT`, `UTILIZATION_RATIO` in `crates/qmdb-common/src/def.rs`).
-
-Absolute throughput depends on the SSDs and CPU of your machine; the ordering between systems and the trends across
-state sizes should hold on comparable hardware.
+- **Before each run:** delete the database directory and drop the page cache:
+  `rm -rf /mnt/ssd/<db> && sync && echo 3 | sudo tee /proc/sys/vm/drop_caches`.
 
 ### 6.2 Database-size sweep (Fig. 5 and Fig. 8)
 
@@ -254,7 +249,7 @@ lines printed by the same runs.
 
 | System | Settings |
 |---|---|
-| QMDB | 16 shards, threshold 0.7, `--rayon-threads 128`; run the sweep three times |
+| QMDB | 16 shards and compaction threshold 0.7 (source defaults `SHARD_COUNT = 16` and `UTILIZATION_RATIO = 7` in `crates/qmdb-common/src/def.rs`); `--rayon-threads 128` |
 | NOMT | page cache 16 GiB, leaf cache 10 GiB, commit concurrency 8, 32 IO workers, 2 upper levels prepopulated; buckets 39,073,369 (100M), 93,329,983 (300M), 248,354,236 (600M), 575,546,222 (≥ 900M); `--rayon-threads 64` |
 | LVMT | RocksDB memory budget 2 GiB, 16 shards |
 | Reth | default MDBX settings; 100M–600M only |
@@ -263,14 +258,12 @@ QMDB (from `bench/`):
 ```bash
 cd bench
 for n in 100000000 300000000 600000000 900000000 1200000000 1500000000; do
-  for r in 1 2 3; do
-    rm -rf /mnt/ssd/QMDB && sync && echo 3 | sudo tee /proc/sys/vm/drop_caches >/dev/null
-    sudo systemd-run --scope -p MemoryMax=32G -p MemoryHigh=32G \
-      prlimit --nofile=65535:65535 taskset -c 0-63 \
-      ~/bin/speed_qmdb --db-dir /mnt/ssd/QMDB --entry-count $n --ops-per-block 100000 \
-        --hover-interval 30000 --rayon-threads 128 --randsrc-filename /mnt/ssd/randsrc.dat \
-      2>&1 | tee qmdb_${n}_r${r}.log
-  done
+  rm -rf /mnt/ssd/QMDB && sync && echo 3 | sudo tee /proc/sys/vm/drop_caches >/dev/null
+  sudo systemd-run --scope -p MemoryMax=32G -p MemoryHigh=32G \
+    prlimit --nofile=65535:65535 taskset -c 0-63 \
+    ~/bin/speed_qmdb --db-dir /mnt/ssd/QMDB --entry-count $n --ops-per-block 100000 \
+      --hover-interval 30000 --rayon-threads 128 --randsrc-filename /mnt/ssd/randsrc.dat \
+    2>&1 | tee qmdb_${n}.log
 done
 ```
 
@@ -308,8 +301,6 @@ sudo systemd-run --scope -p MemoryMax=32G -p MemoryHigh=32G \
 The run ends with `Benchmark Finished.`, `Total Ops: N` and `Duration: Ts`. Throughput is N / T operations per second;
 the paper converts it to transactions per second with 17.91 state operations per transaction (1,002,507,459 / 55,965,021).
 
-On `r6gd.2xlarge`, pin the run to the eight vCPUs (`taskset -c 0-7`) and use the same 32 GiB cap.
-
 ### 6.4 QMDB-only sweeps (Fig. 7, Fig. 9, Fig. 10)
 
 All at 1.5B entries, with the QMDB command of 6.2 (`--entry-count 1500000000`). The paper's runs for these figures
@@ -331,16 +322,6 @@ sed -E -i 's/pub const SHARD_COUNT: usize = [0-9]+;/pub const SHARD_COUNT: usize
 `pipeline_off` makes the engine wait until the previous block has finished before it starts the next one
 (pipeline depth 1).
 
-### 6.5 Results stated in the text
-
-| Result | Section | How to reproduce |
-|---|---|---|
-| x86 `c6id.16xlarge` within 1–2% of `c7gd.metal` | §5 setup | The QMDB 1.5B run of 6.2 on `c6id.16xlarge`, 3 runs |
-| Entry-level `r6gd.2xlarge` | §5.1, Fig. 6 | 6.3 on `r6gd.2xlarge` |
-| Read/Update mix: raising the Read fraction from 0 to 1 raises throughput by only about 8% | §5.1 | Run the QMDB 1.5B command of 6.2 with `env HOVER_RW_RATIOS=0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0` inside the scope. The final hover skips Insert and Delete and runs one mixed phase per ratio (each operation is a Read with that probability, otherwise an Update), reported as `rw_read00` … `rw_read10` |
-| Hybrid indexer: 10.7 → 1.5 bytes per entry; throughput under 32 GiB and 8 GiB caps; queue depth | §6 | Build with the hybrid indexer (3.4) and vary `MemoryMax`/`MemoryHigh` |
-| Recovery estimate | §6 | Analytical, from the 5 GB/s sequential read throughput of `c7gd.metal` |
-
 ---
 
 ## 7. Output and metrics
@@ -359,12 +340,11 @@ All results are printed to stdout.
 | `Replay [x%] Block N \| TPS: ...` | Ethereum replay progress |
 | `Benchmark Finished.`, `Total Ops: N`, `Duration: Ts` | end of an Ethereum replay |
 
-QMDB's Read phases stop their timer at the prefetcher's last SSD read (no new read for 40 ms), not when `flush()`
-returns: the updater treats Reads as no-ops, so `flush()` returns while the io_uring prefetcher is still reading.
-
 ---
 
-## 8. Baselines, patches and differences from upstream
+## 8. Differences from upstream
+
+### 8.1 Baselines
 
 | System | Upstream | Commit | License | In this repository |
 |---|---|---|---|---|
@@ -372,18 +352,17 @@ returns: the updater treats Reads as no-ops, so `flush()` returns while the io_u
 | LVMT | [ChenxingLi/authenticated-storage-benchmarks](https://github.com/ChenxingLi/authenticated-storage-benchmarks) | `c22ff82` (2023-07-06) | see upstream | `lvmt/`, git submodule, unmodified |
 | Reth | [paradigmxyz/reth](https://github.com/paradigmxyz/reth) | `1ba631b` (2024-10-10) | MIT or Apache-2.0 | `reth/`, unmodified |
 
-`nomt/` and `reth/` are identical to their upstream commits except for Reth's `book/cli/reth/debug/` documentation
-(excluded by `.gitignore`) and one patch:
-- **NOMT, `nomt/nomt/src/beatree/leaf_cache.rs`:** `insert()` evicts least-recently-used leaves whenever the cache
+- **NOMT patch (`nomt/nomt/src/beatree/leaf_cache.rs`):** `insert()` evicts least-recently-used leaves whenever the cache
   exceeds its capacity. Upstream trims the cache only after a sync, so leaves loaded by Reads between syncs grow it
   without bound and exceed the memory cap. The patch changes caching only, not values or roots.
+- **One write per key per block:** when a block writes a key several times, the adapters pass only the last write to
+  NOMT and LVMT (LVMT's upstream code panics when one key is written many times in an epoch, which the Ethereum trace
+  does). The harness builds only `nomt/nomt`, `nomt/core`, `lvmt/asb-authdb/lvmt-db` and
+  `lvmt/asb-backend/cfx-kvdb-rocksdb`.
 
-The adapters apply one write per key per block: when a block writes a key several times, NOMT and LVMT receive only
-the last write (LVMT's upstream code panics when one key is written many times in an epoch, which the Ethereum trace
-does). The harness builds only `nomt/nomt`, `nomt/core`, `lvmt/asb-authdb/lvmt-db` and
-`lvmt/asb-backend/cfx-kvdb-rocksdb`.
+### 8.2 QMDB
 
-**QMDB here vs LayerZero-Labs/qmdb `f14a2a0`.** The engine in `crates/` differs from the public code in:
+The engine in `crates/` differs from [LayerZero-Labs/qmdb](https://github.com/LayerZero-Labs/qmdb) at `f14a2a0` in:
 - prefetcher job pool of 40,000 jobs instead of 4,000 (`crates/qmdb/src/prefetcher/mod.rs`);
 - io_uring completion waiting: when work is queued but every buffer is busy, a worker waits for one completion
   instead of up to 32 (`crates/qmdb/src/prefetcher/dioprefetcher.rs`);
@@ -435,9 +414,9 @@ and dispatch on `OP_CREATE`, `OP_WRITE`, `OP_DELETE` and `OP_READ` from `qmdb_co
 | Path | License | Origin |
 |---|---|---|
 | repository root (`LICENSE`) | MIT | as in LayerZero-Labs/qmdb |
-| `crates/` | MIT OR Apache-2.0 | QMDB engine from LayerZero-Labs/qmdb, with the changes in Section 8 |
+| `crates/` | MIT OR Apache-2.0 | QMDB engine from LayerZero-Labs/qmdb, with the changes in Section 8.2 |
 | `bench/` | Apache-2.0 (`bench/LICENSE`) | benchmark driver from LayerZero-Labs/qmdb, extended with the baseline adapters |
-| `nomt/`, `reth/`, `lvmt/` | their own licenses | Section 8 |
+| `nomt/`, `reth/`, `lvmt/` | their own licenses | Section 8.1 |
 
 ```bibtex
 @article{cui2027qmdb,
