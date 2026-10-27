@@ -8,53 +8,34 @@ Structures* (Sijie Cui, Ziyue Qiu, Isaac Zhang, Ryan Zarick, Daniel Wong, Thomas
 George Amvrosiadis; Carnegie Mellon University and LayerZero Labs).
 
 It contains:
-- the **QMDB engine** used in the paper's evaluation (`crates/`),
 - **`speed`**, a benchmark driver that runs QMDB and the three baselines (NOMT, LVMT, Reth) through one shared
   workload generator, so all systems see the same operations; it also replays the Ethereum mainnet trace (`bench/`),
+- the **QMDB engine** used in the paper's evaluation (`crates/`); the production implementation is maintained at
+  [LayerZero-Labs/qmdb](https://github.com/LayerZero-Labs/qmdb), and
+  [Section 8](#8-baselines-patches-and-differences-from-upstream) lists every difference between that code and the copy here,
 - the **baselines** at the exact upstream commits we measured: NOMT and Reth vendored, NOMT with one documented patch,
   and LVMT as an unmodified git submodule (`nomt/`, `reth/`, `lvmt/`).
-
-The production implementation of QMDB is maintained at [LayerZero-Labs/qmdb](https://github.com/LayerZero-Labs/qmdb).
-[Section 9](#9-baselines-patches-and-differences-from-upstream) lists every difference between that code and the copy here.
 
 **Paper:** Proceedings of the VLDB Endowment, Vol. 20, 2027.
 
 ---
 
 ## Contents
-1. [Claims](#1-claims)
-2. [Repository layout](#2-repository-layout)
-3. [Requirements](#3-requirements)
-4. [Setup and build](#4-setup-and-build)
-5. [Kick the tires](#5-kick-the-tires)
-6. [Workloads and datasets](#6-workloads-and-datasets)
-7. [Reproducing the paper's results](#7-reproducing-the-papers-results)
-8. [Output and metrics](#8-output-and-metrics)
-9. [Baselines, patches and differences from upstream](#9-baselines-patches-and-differences-from-upstream)
-10. [Extending the harness](#10-extending-the-harness)
-11. [Troubleshooting](#11-troubleshooting)
-12. [License and citation](#12-license-and-citation)
+1. [Repository layout](#1-repository-layout)
+2. [Requirements](#2-requirements)
+3. [Setup and build](#3-setup-and-build)
+4. [Kick the tires](#4-kick-the-tires)
+5. [Workloads and datasets](#5-workloads-and-datasets)
+6. [Reproducing the paper's results](#6-reproducing-the-papers-results)
+7. [Output and metrics](#7-output-and-metrics)
+8. [Baselines, patches and differences from upstream](#8-baselines-patches-and-differences-from-upstream)
+9. [Extending the harness](#9-extending-the-harness)
+10. [Troubleshooting](#10-troubleshooting)
+11. [License and citation](#11-license-and-citation)
 
 ---
 
-## 1. Claims
-
-The numbers below are the paper's, measured on AWS `c7gd.metal` unless noted; [Section 7.1](#71-measurement-protocol)
-lists the measurement conditions. Absolute throughput depends on the SSDs and CPU of your machine; the ordering
-between systems and the trends across state sizes should hold on comparable hardware.
-
-| # | Claim | Paper | Section |
-|---|---|---|---|
-| C1 | QMDB's CRUD throughput stays within 6% from 100M to 1.5B entries while the baselines degrade. At 1.5B entries QMDB sustains 965K reads/s and 897K updates/s and beats every baseline on Create/Update/Delete by 7–155×. | Fig. 5, §5.1 | [7.2](#72-database-size-sweep-fig-5-and-fig-8) |
-| C2 | QMDB's memory grows near-linearly with state, from 2 GiB at 100M to 16 GiB at 1.5B entries (about 12 bytes per entry). | Fig. 8, §5.2 | [7.2](#72-database-size-sweep-fig-5-and-fig-8) |
-| C3 | On a replay of Ethereum mainnet blocks 15,012,300 – 15,312,299, QMDB is 3–31× faster than the baselines on `c7gd.metal` and 3.7–10× faster on `r6gd.2xlarge`, and it is the only system above 100K TPS. | Fig. 6, Fig. 1b, §5.1 | [7.3](#73-ethereum-mainnet-replay-fig-6) |
-| C4 | Across Zipfian skew θ ∈ [0, 1.5] at 1.5B entries, throughput passes through three regimes; for 0.6 ≤ θ ≤ 1.2 the per-block entry cache cuts per-Read SSD bytes from 4,220 to 474, and Read and Update reach 4.05M and 2.69M ops/s. | Fig. 7, §5.1 | [7.4](#74-qmdb-only-sweeps-fig-7-fig-9-fig-10) |
-| C5 | Raising the compaction threshold from 0.4 to 1.0 cuts on-disk usage from 425 GiB to 288 GiB, at the cost of extra migration writes per operation. | Fig. 9, §5.3 | [7.4](#74-qmdb-only-sweeps-fig-7-fig-9-fig-10) |
-| C6 | Throughput scales near-linearly from 1 to 4 shards (3.8× Update, 2.8× Read); without pipelining, Update plateaus at about 80% of the pipelined peak. | Fig. 10, §5.4 | [7.4](#74-qmdb-only-sweeps-fig-7-fig-9-fig-10) |
-
----
-
-## 2. Repository layout
+## 1. Repository layout
 
 ```
 .
@@ -66,14 +47,14 @@ between systems and the trends across state sizes should hold on comparable hard
 │   ├── src/bin/speed.rs     populate -> CRUD "hover" phases -> optional Ethereum replay
 │   ├── src/cli.rs           every command-line flag
 │   ├── src/speed/           qmdb.rs, nomt_adapter.rs, lvmt_adapter.rs, reth_adapter.rs, eth_replay.rs, generators, metrics
-│   └── Cargo.toml.{lvmt,reth}, Cargo.lock.{lvmt,reth}, switch_backend.sh   manifest switch between the LVMT and Reth builds (Section 4)
-├── nomt/  reth/             vendored baselines (upstream commits and the NOMT patch in Section 9)
+│   └── Cargo.toml.{lvmt,reth}, Cargo.lock.{lvmt,reth}, switch_backend.sh   manifest switch between the LVMT and Reth builds (Section 3)
+├── nomt/  reth/             vendored baselines (upstream commits and the NOMT patch in Section 8)
 └── lvmt/                    git submodule: upstream LVMT, unmodified
 ```
 
 ---
 
-## 3. Requirements
+## 2. Requirements
 
 ### Hardware
 
@@ -102,9 +83,9 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 
 ---
 
-## 4. Setup and build
+## 3. Setup and build
 
-### 4.1 Source
+### 3.1 Source
 
 LVMT is a git submodule, so clone recursively (or run `git submodule update --init` in an existing clone):
 ```bash
@@ -112,7 +93,7 @@ git clone --recursive https://github.com/CMU-SijieC/QMDB-Benchmark.git
 cd QMDB-Benchmark
 ```
 
-### 4.2 Storage
+### 3.2 Storage
 
 ```bash
 sudo mdadm --create /dev/md0 --level=0 --raid-devices=2 /dev/nvme1n1 /dev/nvme2n1
@@ -120,7 +101,7 @@ sudo mkfs.ext4 -F /dev/md0
 sudo mkdir -p /mnt/ssd && sudo mount /dev/md0 /mnt/ssd && sudo chown "$USER" /mnt/ssd
 ```
 
-### 4.3 Workload seed
+### 3.3 Workload seed
 
 The synthetic workload is generated deterministically from a file of random bytes. Use the **same file for every
 system** so that all of them see the same key stream.
@@ -129,7 +110,7 @@ system** so that all of them see the same key stream.
 head -c 10M </dev/urandom > /mnt/ssd/randsrc.dat
 ```
 
-### 4.4 Building the backends
+### 3.4 Building the backends
 
 The backend is selected at **compile time** by a Cargo feature; without a feature, `speed` runs QMDB. LVMT and Reth
 link incompatible versions of `zstd-sys`, so `bench/switch_backend.sh` swaps `bench/Cargo.toml` and the workspace
@@ -161,7 +142,7 @@ Optional checks: `ulimit -n 65535 && cargo test --release -p qmdb -p qmdb-common
 
 ---
 
-## 5. Kick the tires
+## 4. Kick the tires
 
 These runs exercise every backend end to end on a small state (1–2 million entries). Run them from `bench/`, because
 the LVMT adapter keeps its public parameters in `../lvmt/pp`; LVMT generates them on its first run.
@@ -206,9 +187,9 @@ Delete the smoke databases afterwards: `rm -rf /mnt/ssd/*_smoke`.
 
 ---
 
-## 6. Workloads and datasets
+## 5. Workloads and datasets
 
-### 6.1 Synthetic CRUD workload
+### 5.1 Synthetic CRUD workload
 
 `speed` first **populates** `--entry-count` entries in blocks of `--ops-per-block` operations (default 100,000).
 Every `--hover-interval` blocks it pauses population and runs **hover** phases that time Update and Read throughput;
@@ -219,7 +200,7 @@ distribution (0.99 is YCSB-style skew; θ > 1 is extreme skew). All randomness c
 
 `--entry-count` must be a multiple of `--ops-per-block`. All flags are documented in `bench/src/cli.rs`.
 
-### 6.2 Ethereum mainnet replay
+### 5.2 Ethereum mainnet replay
 
 The replay uses the state operations of Ethereum mainnet blocks 15,012,300 – 15,312,299 (2022-06-23 to 2022-08-10):
 1,002,507,459 state operations, 60.2% of them Reads. Each block's operations are stored as
@@ -243,13 +224,13 @@ cd /mnt/ssd/init_db_output && sha256sum -c SHA256SUMS
 mkdir -p /mnt/ssd/real_eth_workload/kv_decompressed
 tar xf traces_op_300k.tar -C /mnt/ssd/real_eth_workload/kv_decompressed && rm traces_op_300k.tar
 ```
-The commands in Section 7.3 expect these two paths.
+The commands in Section 6.3 expect these two paths.
 
 ---
 
-## 7. Reproducing the paper's results
+## 6. Reproducing the paper's results
 
-### 7.1 Measurement protocol
+### 6.1 Measurement protocol
 
 - **Machine:** `c7gd.metal` unless noted; the RAID-0 array mounted at `/mnt/ssd`.
 - **Memory:** a 32 GiB cgroup-v2 cap (`MemoryMax=32G`, `MemoryHigh=32G`) that limits allocations and the page cache:
@@ -261,7 +242,10 @@ The commands in Section 7.3 expect these two paths.
 - **Repetitions:** QMDB in Fig. 5 is the mean of 3 runs with the standard deviation as error bars; other points are single runs.
 - **QMDB configuration:** source defaults, i.e. 16 shards and compaction threshold 0.7 (`SHARD_COUNT`, `UTILIZATION_RATIO` in `crates/qmdb-common/src/def.rs`).
 
-### 7.2 Database-size sweep (Fig. 5 and Fig. 8)
+Absolute throughput depends on the SSDs and CPU of your machine; the ordering between systems and the trends across
+state sizes should hold on comparable hardware.
+
+### 6.2 Database-size sweep (Fig. 5 and Fig. 8)
 
 Uniform CRUD at 100M, 300M, 600M, 900M, 1.2B and 1.5B entries, 32 GiB cap. Fig. 8 uses the memory, SSD and CPU
 lines printed by the same runs.
@@ -303,7 +287,7 @@ NOMT reads its bucket count from `NOMT_BUCKETS` (values in the table above; the 
 4 KiB of SSD per bucket, about 2.4 TB at 575,546,222 buckets. Its page and leaf caches are fixed at 16 GiB and 10 GiB in
 `bench/src/speed/nomt_adapter.rs`.
 
-### 7.3 Ethereum mainnet replay (Fig. 6)
+### 6.3 Ethereum mainnet replay (Fig. 6)
 
 Each system loads the InitDbBundle and replays the window; the result is the replay's wall-clock time.
 
@@ -324,9 +308,9 @@ the paper converts it to transactions per second with 17.91 state operations per
 
 On `r6gd.2xlarge`, pin the run to the eight vCPUs (`taskset -c 0-7`) and use the same 32 GiB cap.
 
-### 7.4 QMDB-only sweeps (Fig. 7, Fig. 9, Fig. 10)
+### 6.4 QMDB-only sweeps (Fig. 7, Fig. 9, Fig. 10)
 
-All at 1.5B entries, with the QMDB command of 7.2 (`--entry-count 1500000000`). The paper's runs for these figures
+All at 1.5B entries, with the QMDB command of 6.2 (`--entry-count 1500000000`). The paper's runs for these figures
 used 500-block phases; add `--hover-write-block 500 --hover-recreate-block 500` to match.
 
 | Figure | What varies | How |
@@ -334,7 +318,7 @@ used 500-block phases; add `--hover-write-block 500 --hover-recreate-block 500` 
 | Fig. 7 | Zipfian θ = 0, 0.2, 0.4, 0.6, 0.8, 1.01, 1.2, 1.4, 1.5 | `--hover-zipf-theta θ` |
 | Fig. 9 | compaction threshold 0.4 – 1.0 | `UTILIZATION_RATIO` = 4 … 10 in `crates/qmdb-common/src/def.rs`, then rebuild |
 | Fig. 10 | shards 1, 2, 4, 8, 16, 32 | `SHARD_COUNT` in `crates/qmdb-common/src/def.rs`, then rebuild |
-| Fig. 10, pipelining off | shards as above | build with `--features qmdb/pipeline_off` (4.4) in addition to `SHARD_COUNT` |
+| Fig. 10, pipelining off | shards as above | build with `--features qmdb/pipeline_off` (3.4) in addition to `SHARD_COUNT` |
 
 The two compile-time constants can be set with `sed`; restore the defaults (7 and 16) afterwards:
 ```bash
@@ -345,19 +329,19 @@ sed -E -i 's/pub const SHARD_COUNT: usize = [0-9]+;/pub const SHARD_COUNT: usize
 `pipeline_off` makes the engine wait until the previous block has finished before it starts the next one
 (pipeline depth 1).
 
-### 7.5 Results stated in the text
+### 6.5 Results stated in the text
 
 | Result | Section | How to reproduce |
 |---|---|---|
-| x86 `c6id.16xlarge` within 1–2% of `c7gd.metal` | §5 setup | The QMDB 1.5B run of 7.2 on `c6id.16xlarge`, 3 runs |
-| Entry-level `r6gd.2xlarge` | §5.1, Fig. 6 | 7.3 on `r6gd.2xlarge` |
-| Read/Update mix: raising the Read fraction from 0 to 1 raises throughput by only about 8% | §5.1 | Run the QMDB 1.5B command of 7.2 with `env HOVER_RW_RATIOS=0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0` inside the scope. The final hover skips Insert and Delete and runs one mixed phase per ratio (each operation is a Read with that probability, otherwise an Update), reported as `rw_read00` … `rw_read10` |
-| Hybrid indexer: 10.7 → 1.5 bytes per entry; throughput under 32 GiB and 8 GiB caps; queue depth | §6 | Build with the hybrid indexer (4.4) and vary `MemoryMax`/`MemoryHigh` |
+| x86 `c6id.16xlarge` within 1–2% of `c7gd.metal` | §5 setup | The QMDB 1.5B run of 6.2 on `c6id.16xlarge`, 3 runs |
+| Entry-level `r6gd.2xlarge` | §5.1, Fig. 6 | 6.3 on `r6gd.2xlarge` |
+| Read/Update mix: raising the Read fraction from 0 to 1 raises throughput by only about 8% | §5.1 | Run the QMDB 1.5B command of 6.2 with `env HOVER_RW_RATIOS=0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0` inside the scope. The final hover skips Insert and Delete and runs one mixed phase per ratio (each operation is a Read with that probability, otherwise an Update), reported as `rw_read00` … `rw_read10` |
+| Hybrid indexer: 10.7 → 1.5 bytes per entry; throughput under 32 GiB and 8 GiB caps; queue depth | §6 | Build with the hybrid indexer (3.4) and vary `MemoryMax`/`MemoryHigh` |
 | Recovery estimate | §6 | Analytical, from the 5 GB/s sequential read throughput of `c7gd.metal` |
 
 ---
 
-## 8. Output and metrics
+## 7. Output and metrics
 
 All results are printed to stdout.
 
@@ -378,7 +362,7 @@ returns: the updater treats Reads as no-ops, so `flush()` returns while the io_u
 
 ---
 
-## 9. Baselines, patches and differences from upstream
+## 8. Baselines, patches and differences from upstream
 
 | System | Upstream | Commit | License | In this repository |
 |---|---|---|---|---|
@@ -409,7 +393,7 @@ The first two change performance only; none of the changes affects Merkle roots,
 
 ---
 
-## 10. Extending the harness
+## 9. Extending the harness
 
 A backend implements six functions, and `speed` calls them through `bench/src/speed/db_backend.rs`:
 
@@ -431,7 +415,7 @@ and dispatch on `OP_CREATE`, `OP_WRITE`, `OP_DELETE` and `OP_READ` from `qmdb_co
 
 ---
 
-## 11. Troubleshooting
+## 10. Troubleshooting
 
 - **`Too many open files`:** raise the limit (`ulimit -n 65535`). Under `systemd-run`, set it inside the scope
   (`prlimit --nofile=...`); `-p LimitNOFILE` is rejected for scopes.
@@ -444,14 +428,14 @@ and dispatch on `OP_CREATE`, `OP_WRITE`, `OP_DELETE` and `OP_READ` from `qmdb_co
 
 ---
 
-## 12. License and citation
+## 11. License and citation
 
 | Path | License | Origin |
 |---|---|---|
 | repository root (`LICENSE`) | MIT | as in LayerZero-Labs/qmdb |
-| `crates/` | MIT OR Apache-2.0 | QMDB engine from LayerZero-Labs/qmdb, with the changes in Section 9 |
+| `crates/` | MIT OR Apache-2.0 | QMDB engine from LayerZero-Labs/qmdb, with the changes in Section 8 |
 | `bench/` | Apache-2.0 (`bench/LICENSE`) | benchmark driver from LayerZero-Labs/qmdb, extended with the baseline adapters |
-| `nomt/`, `reth/`, `lvmt/` | their own licenses | Section 9 |
+| `nomt/`, `reth/`, `lvmt/` | their own licenses | Section 8 |
 
 ```bibtex
 @article{cui2027qmdb,
