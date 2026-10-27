@@ -278,7 +278,6 @@ sudo systemd-run --scope -p MemoryMax=32G -p MemoryHigh=32G \
     --rayon-threads 64 --randsrc-filename /mnt/ssd/randsrc.dat \
   2>&1 | tee nomt_1500M.log
 ```
-The baseline runs used 500-block phases (50M operations each); the QMDB runs used the default of 50 blocks.
 NOMT reads its bucket count from `NOMT_BUCKETS` (values in the table above; the default is 575,546,222) and preallocates
 4 KiB of SSD per bucket, about 2.4 TB at 575,546,222 buckets. Its page and leaf caches are fixed at 16 GiB and 10 GiB in
 `bench/src/speed/nomt_adapter.rs`.
