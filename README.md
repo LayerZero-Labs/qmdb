@@ -47,7 +47,7 @@ It contains:
 │   ├── src/bin/speed.rs     populate -> CRUD "hover" phases -> optional Ethereum replay
 │   ├── src/cli.rs           every command-line flag
 │   ├── src/speed/           qmdb.rs, nomt_adapter.rs, lvmt_adapter.rs, reth_adapter.rs, eth_replay.rs, generators, metrics
-│   └── Cargo.toml.{lvmt,reth}, Cargo.lock.{lvmt,reth}, switch_backend.sh   manifest switch between the LVMT and Reth builds (Section 3)
+│   └── Cargo.toml.{lvmt,reth}, Cargo.lock.{lvmt,reth}, switch_backend.sh   manifest switch between the LVMT and Reth builds (Section 3.4)
 ├── nomt/  reth/             vendored baselines (upstream commits and the NOMT patch in Section 8.1)
 └── lvmt/                    git submodule: upstream LVMT, unmodified
 ```
@@ -130,6 +130,7 @@ CXXFLAGS="-fpermissive -std=c++17 -include cstdint" \
 # Reth needs its own manifest; switch back afterwards
 ./switch_backend.sh reth && cargo build --release --bin speed --features use_reth && cp ../target/release/speed ~/bin/speed_reth
 ./switch_backend.sh lvmt
+cd ..
 ```
 
 ---
@@ -234,7 +235,7 @@ The commands in Section 6.3 expect these two paths.
 
 ### 6.1 Measurement protocol
 
-- **Machine:** `c7gd.metal` unless noted; the RAID-0 array mounted at `/mnt/ssd`.
+- **Machine:** `c7gd.metal`; the RAID-0 array mounted at `/mnt/ssd`.
 - **Memory:** a 32 GiB cgroup-v2 cap (`MemoryMax=32G`, `MemoryHigh=32G`) that limits allocations and the page cache:
   `sudo systemd-run --scope -p MemoryMax=32G -p MemoryHigh=32G ...`.
 - **CPUs:** all 64 cores (the commands below pin them with `taskset -c 0-63`). File descriptors: ≥ 65,535 (1,048,576 for NOMT),
@@ -269,7 +270,6 @@ done
 
 Baselines (example: NOMT at 1.5B; replace the binary for LVMT and Reth):
 ```bash
-cd bench
 rm -rf /mnt/ssd/NOMT && sync && echo 3 | sudo tee /proc/sys/vm/drop_caches >/dev/null
 sudo systemd-run --scope -p MemoryMax=32G -p MemoryHigh=32G \
   env NOMT_BUCKETS=575546222 prlimit --nofile=1048576:1048576 taskset -c 0-63 \
@@ -278,6 +278,7 @@ sudo systemd-run --scope -p MemoryMax=32G -p MemoryHigh=32G \
     --rayon-threads 64 --randsrc-filename /mnt/ssd/randsrc.dat \
   2>&1 | tee nomt_1500M.log
 ```
+The baseline runs used 500-block phases (50M operations each); the QMDB runs used the default of 50 blocks.
 NOMT reads its bucket count from `NOMT_BUCKETS` (values in the table above; the default is 575,546,222) and preallocates
 4 KiB of SSD per bucket, about 2.4 TB at 575,546,222 buckets. Its page and leaf caches are fixed at 16 GiB and 10 GiB in
 `bench/src/speed/nomt_adapter.rs`.
@@ -311,7 +312,7 @@ used 500-block phases; add `--hover-write-block 500 --hover-recreate-block 500` 
 | Fig. 7 | Zipfian θ = 0, 0.2, 0.4, 0.6, 0.8, 1.01, 1.2, 1.4, 1.5 | `--hover-zipf-theta θ` |
 | Fig. 9 | compaction threshold 0.4 – 1.0 | `UTILIZATION_RATIO` = 4 … 10 in `crates/qmdb-common/src/def.rs`, then rebuild |
 | Fig. 10 | shards 1, 2, 4, 8, 16, 32 | `SHARD_COUNT` in `crates/qmdb-common/src/def.rs`, then rebuild |
-| Fig. 10, pipelining off | shards as above | build with `--features qmdb/pipeline_off` (3.4) in addition to `SHARD_COUNT` |
+| Fig. 10, pipelining off | shards as above | build with `--features qmdb/pipeline_off` (Section 3.4) in addition to `SHARD_COUNT` |
 
 The two compile-time constants can be set with `sed`; restore the defaults (7 and 16) afterwards:
 ```bash
@@ -370,6 +371,7 @@ The engine in `crates/` differs from [LayerZero-Labs/qmdb](https://github.com/La
   (`PruneCmd` from the flusher to the prefetcher workers);
 - the `pipeline_off` feature for the pipelining ablation (off by default);
 - debug instrumentation, commented-out code and LayerZero's RocksDB reference-model fuzz example were removed.
+
 The first two change performance only; none of the changes affects Merkle roots, proofs or durability.
 
 ---
