@@ -26,7 +26,7 @@ The production implementation of QMDB is maintained at [LayerZero-Labs/qmdb](htt
 2. [Repository layout](#2-repository-layout)
 3. [Requirements](#3-requirements)
 4. [Setup and build](#4-setup-and-build)
-5. [Kick the tires (≈ 40 minutes)](#5-kick-the-tires--40-minutes)
+5. [Kick the tires](#5-kick-the-tires)
 6. [Workloads and datasets](#6-workloads-and-datasets)
 7. [Reproducing the paper's results](#7-reproducing-the-papers-results)
 8. [Output and metrics](#8-output-and-metrics)
@@ -87,8 +87,6 @@ between systems and the trends across state sizes should hold on comparable hard
 The paper also uses `r6gd.2xlarge` (8 vCPUs, 64 GiB, 1 × 474 GB NVMe; $0.461/h) for the entry-level results in Fig. 6,
 and `c6id.16xlarge` (x86, 64 vCPUs, 128 GiB, 2 × 1.9 TB NVMe in RAID-0) for the x86 comparison in §5.
 
-> **Warning:** AWS instance-store NVMe drives are erased when the instance stops. Copy results off the machine before stopping it.
-
 ### Software
 
 - Rust **1.94.0**, pinned by `rust-toolchain.toml` (rustup installs it on first build).
@@ -116,8 +114,6 @@ cd QMDB-Benchmark
 
 ### 4.2 Storage
 
-> **Warning:** the commands below destroy all data on the listed devices. Check device names with `lsblk` first.
-
 ```bash
 sudo mdadm --create /dev/md0 --level=0 --raid-devices=2 /dev/nvme1n1 /dev/nvme2n1
 sudo mkfs.ext4 -F /dev/md0
@@ -140,14 +136,14 @@ link incompatible versions of `zstd-sys`, so `bench/switch_backend.sh` swaps `be
 `Cargo.lock` between two variants before building (details in `bench/BACKEND_SWITCH.md`). Every build writes
 `./target/release/speed`, so copy each binary out.
 
-| Backend | Build (run from `bench/`) | Time on `c7gd.metal` |
-|---|---|---|
-| QMDB | `./switch_backend.sh lvmt && cargo build --release --bin speed` | ≈ 2 min |
-| QMDB, hybrid indexer | `./switch_backend.sh lvmt && cargo build --release --bin speed --features qmdb/use_hybridindexer` | ≈ 2 min |
-| QMDB, pipelining off | `./switch_backend.sh lvmt && cargo build --release --bin speed --features qmdb/pipeline_off` | ≈ 2 min |
-| NOMT | `./switch_backend.sh lvmt && cargo build --release --bin speed --features use_nomt` | ≈ 1 min |
-| LVMT | `./switch_backend.sh lvmt && CXXFLAGS="-fpermissive -std=c++17 -include cstdint" cargo build --release --bin speed --features use_lvmt` | ≈ 2 min |
-| Reth | `./switch_backend.sh reth && cargo build --release --bin speed --features use_reth` | ≈ 2 min |
+| Backend | Build (run from `bench/`) |
+|---|---|
+| QMDB | `./switch_backend.sh lvmt && cargo build --release --bin speed` |
+| QMDB, hybrid indexer | `./switch_backend.sh lvmt && cargo build --release --bin speed --features qmdb/use_hybridindexer` |
+| QMDB, pipelining off | `./switch_backend.sh lvmt && cargo build --release --bin speed --features qmdb/pipeline_off` |
+| NOMT | `./switch_backend.sh lvmt && cargo build --release --bin speed --features use_nomt` |
+| LVMT | `./switch_backend.sh lvmt && CXXFLAGS="-fpermissive -std=c++17 -include cstdint" cargo build --release --bin speed --features use_lvmt` |
+| Reth | `./switch_backend.sh reth && cargo build --release --bin speed --features use_reth` |
 
 ```bash
 mkdir -p ~/bin
@@ -165,10 +161,10 @@ Optional checks: `ulimit -n 65535 && cargo test --release -p qmdb -p qmdb-common
 
 ---
 
-## 5. Kick the tires (≈ 40 minutes)
+## 5. Kick the tires
 
 These runs exercise every backend end to end on a small state (1–2 million entries). Run them from `bench/`, because
-the LVMT adapter keeps its public parameters in `../lvmt/pp`; LVMT generates them on its first run (about two minutes).
+the LVMT adapter keeps its public parameters in `../lvmt/pp`; LVMT generates them on its first run.
 
 ```bash
 cd bench
@@ -183,7 +179,7 @@ for b in nomt lvmt reth; do
 done
 ```
 
-Each run takes about 10 minutes and ends with the phase reports and a results summary. The QMDB run prints,
+Each run ends with the phase reports and a results summary. The QMDB run prints,
 for example (numbers will differ):
 
 ```
@@ -270,12 +266,12 @@ The commands in Section 7.3 expect these two paths.
 Uniform CRUD at 100M, 300M, 600M, 900M, 1.2B and 1.5B entries, 32 GiB cap. Fig. 8 uses the memory, SSD and CPU
 lines printed by the same runs.
 
-| System | Settings | Time per state size | Peak disk at 1.5B |
-|---|---|---|---|
-| QMDB | 16 shards, threshold 0.7, `--rayon-threads 128`; run the sweep three times | 10–35 min | ≈ 350 GiB |
-| NOMT | page cache 16 GiB, leaf cache 10 GiB, commit concurrency 8, 32 IO workers, 2 upper levels prepopulated; buckets 39,073,369 (100M), 93,329,983 (300M), 248,354,236 (600M), 575,546,222 (≥ 900M); `--rayon-threads 64` | 0.6–6.3 h | 2.6 TiB |
-| LVMT | RocksDB memory budget 2 GiB, 16 shards | 2.6–32 h | — |
-| Reth | default MDBX settings; 100M–600M only | 4.9 h, 23 h, 108 h | — |
+| System | Settings |
+|---|---|
+| QMDB | 16 shards, threshold 0.7, `--rayon-threads 128`; run the sweep three times |
+| NOMT | page cache 16 GiB, leaf cache 10 GiB, commit concurrency 8, 32 IO workers, 2 upper levels prepopulated; buckets 39,073,369 (100M), 93,329,983 (300M), 248,354,236 (600M), 575,546,222 (≥ 900M); `--rayon-threads 64` |
+| LVMT | RocksDB memory budget 2 GiB, 16 shards |
+| Reth | default MDBX settings; 100M–600M only |
 
 QMDB (from `bench/`):
 ```bash
@@ -326,13 +322,6 @@ sudo systemd-run --scope -p MemoryMax=32G -p MemoryHigh=32G \
 The run ends with `Benchmark Finished.`, `Total Ops: N` and `Duration: Ts`. Throughput is N / T operations per second;
 the paper converts it to transactions per second with 17.91 state operations per transaction (1,002,507,459 / 55,965,021).
 
-| System | `c7gd.metal` replay time (paper) | `r6gd.2xlarge` replay time (paper) |
-|---|---|---|
-| QMDB | 487 s, plus 632 s to load the bundle | ≈ 36 min |
-| NOMT | 24 min | 2.8 h |
-| LVMT | 2.2 h | 2.2 h |
-| Reth | 4.1 h | 6.1 h |
-
 On `r6gd.2xlarge`, pin the run to the eight vCPUs (`taskset -c 0-7`) and use the same 32 GiB cap.
 
 ### 7.4 QMDB-only sweeps (Fig. 7, Fig. 9, Fig. 10)
@@ -340,12 +329,12 @@ On `r6gd.2xlarge`, pin the run to the eight vCPUs (`taskset -c 0-7`) and use the
 All at 1.5B entries, with the QMDB command of 7.2 (`--entry-count 1500000000`). The paper's runs for these figures
 used 500-block phases; add `--hover-write-block 500 --hover-recreate-block 500` to match.
 
-| Figure | What varies | How | Time per point |
-|---|---|---|---|
-| Fig. 7 | Zipfian θ = 0, 0.2, 0.4, 0.6, 0.8, 1.01, 1.2, 1.4, 1.5 | `--hover-zipf-theta θ` | ≈ 33 min |
-| Fig. 9 | compaction threshold 0.4 – 1.0 | `UTILIZATION_RATIO` = 4 … 10 in `crates/qmdb-common/src/def.rs`, then rebuild | ≈ 38 min |
-| Fig. 10 | shards 1, 2, 4, 8, 16, 32 | `SHARD_COUNT` in `crates/qmdb-common/src/def.rs`, then rebuild | 44–112 min |
-| Fig. 10, pipelining off | shards as above | build with `--features qmdb/pipeline_off` (4.4) in addition to `SHARD_COUNT` | 44–112 min |
+| Figure | What varies | How |
+|---|---|---|
+| Fig. 7 | Zipfian θ = 0, 0.2, 0.4, 0.6, 0.8, 1.01, 1.2, 1.4, 1.5 | `--hover-zipf-theta θ` |
+| Fig. 9 | compaction threshold 0.4 – 1.0 | `UTILIZATION_RATIO` = 4 … 10 in `crates/qmdb-common/src/def.rs`, then rebuild |
+| Fig. 10 | shards 1, 2, 4, 8, 16, 32 | `SHARD_COUNT` in `crates/qmdb-common/src/def.rs`, then rebuild |
+| Fig. 10, pipelining off | shards as above | build with `--features qmdb/pipeline_off` (4.4) in addition to `SHARD_COUNT` |
 
 The two compile-time constants can be set with `sed`; restore the defaults (7 and 16) afterwards:
 ```bash
