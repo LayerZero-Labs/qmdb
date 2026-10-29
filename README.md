@@ -234,11 +234,14 @@ The commands in Section 6.3 expect these two paths.
 
 ### 6.1 Measurement protocol
 
-- **Machine:** `c7gd.metal`; the RAID-0 array mounted at `/mnt/ssd`.
+- **Machine:** `c7gd.metal`; the RAID-0 array mounted at `/mnt/ssd`. The Ethereum replay also runs on `c6id.16xlarge`
+  and `r6gd.2xlarge` (Section 6.3).
 - **Memory:** a 32 GiB cgroup-v2 cap (`MemoryMax=32G`, `MemoryHigh=32G`) that limits allocations and the page cache:
-  `sudo systemd-run --scope -p MemoryMax=32G -p MemoryHigh=32G ...`.
-- **CPUs:** all 64 cores (the commands below pin them with `taskset -c 0-63`). File descriptors: ≥ 65,535 (1,048,576 for NOMT and the Ethereum replay),
-  set with `prlimit` inside the scope.
+  `sudo systemd-run --scope -p MemoryMax=32G -p MemoryHigh=32G ...`. The Ethereum replay sets the cap only after the
+  initial state is loaded (Section 6.3).
+- **CPUs:** all 64 cores (the commands below pin them with `taskset -c 0-63`; Section 6.3 lists the CPU sets of the
+  other two instances). File descriptors: ≥ 65,535 (1,048,576 for NOMT in Section 6.2), set with `prlimit` inside the
+  scope.
 - **Before each run:** delete the database directory and drop the page cache:
   `rm -rf /mnt/ssd/<db> && sync && echo 3 | sudo tee /proc/sys/vm/drop_caches`.
 
@@ -283,22 +286,61 @@ NOMT reads its bucket count from `NOMT_BUCKETS` (values in the table above; the 
 
 ### 6.3 Ethereum mainnet replay (Fig. 6)
 
-Each system loads the InitDbBundle and replays the window; the result is the replay's wall-clock time.
+Each system loads the InitDbBundle without a memory cap and then replays the window under the 32 GiB cap; the result
+is the replay's wall-clock time. The cap is set on the run's scope with `systemctl set-property` when `speed` prints
+`=== Phase 2`, before the timed replay starts. All four systems run with `--rayon-threads 128`,
+`prlimit --nofile=65535:65535` and these environment variables:
+- `QMDB_BIGBUF_MEMSET=1` (QMDB only): zero QMDB's large buffers with memset instead of `calloc`; for `calloc`, jemalloc
+  zeroes recycled memory with `madvise(MADV_DONTNEED)`, whose TLB-shootdown interrupts stall the other threads;
+- `ETH_PREFETCH=256`: number of trace files loaded concurrently (default 100);
+- `ETH_PAR_LOAD=1`: read and decode the trace files on Tokio's blocking thread pool, so that the loads run in parallel;
+- `ETH_PAR_PACK=8`: pack the operations into DB blocks on 8 threads and deliver them in order; the blocks are the same
+  as with the serial packer (variable unset);
+- `NOMT_BUCKETS=93329983` (NOMT only): a hashtable of about 382 GB, preallocated on the SSD.
+
+The `ETH_*` variables configure the benchmark's trace front end, which is shared by all systems. `QMDB_BIGBUF_MEMSET`
+and `ETH_PAR_LOAD` take effect when set to any value; leave them unset to disable them.
 
 ```bash
-# from bench/; the same flags for speed_qmdb, speed_lvmt and speed_reth
-sudo systemd-run --scope -p MemoryMax=32G -p MemoryHigh=32G \
-  prlimit --nofile=1048576:1048576 taskset -c 0-63 \
-  ~/bin/speed_nomt --db-dir /mnt/ssd/NOMT --entry-count 1500000000 --ops-per-block 100000 \
-    --hover-write-block 0 --hover-recreate-block 0 --hover-interval 1000000 \
+# from bench/; SYS is qmdb, nomt, lvmt or reth
+SYS=qmdb
+sudo rm -rf /mnt/ssd/eth_db* && sync && echo 3 | sudo tee /proc/sys/vm/drop_caches >/dev/null
+sudo systemd-run --scope --collect --unit=eth-$SYS -p MemoryAccounting=yes \
+  env QMDB_BIGBUF_MEMSET=1 ETH_PAR_PACK=8 ETH_PAR_LOAD=1 ETH_PREFETCH=256 NOMT_BUCKETS=93329983 \
+  prlimit --nofile=65535:65535 taskset -c 0-63 \
+  ~/bin/speed_$SYS --db-dir /mnt/ssd/eth_db --entry-count 1500000000 --ops-per-block 100000 \
+    --hover-zipf-theta 0 --hover-write-block 50 --hover-recreate-block 50 --hover-interval 30000 \
+    --rayon-threads 128 --randsrc-filename /mnt/ssd/randsrc.dat \
     --eth-trace-dir /mnt/ssd/real_eth_workload/kv_decompressed \
     --init-db-path /mnt/ssd/init_db_output/init_db_bundle_15012300_20407400.bin \
-    --eth-replay-start-height 15012300 --eth-replay-end-height 15312299 \
-    --randsrc-filename /mnt/ssd/randsrc.dat 2>&1 | tee nomt_eth.log
+    --eth-replay-start-height 15012300 --eth-replay-end-height 15312300 \
+  > ${SYS}_eth.log 2>&1 &
+PID=$!
+# cap the scope at 32 GiB once the initial state is loaded, before the timed replay starts
+until grep -q "=== Phase 2" ${SYS}_eth.log || [ ! -d /proc/$PID ]; do sleep 0.5; done
+sudo systemctl set-property --runtime eth-$SYS.scope MemoryMax=32G MemoryHigh=32G
+wait $PID
 ```
+
+`--eth-replay-end-height` is inclusive; block 15,312,300 adds no operations, so the replay covers the 1,002,507,459
+operations of Section 5.2. The replay does not use `--entry-count`, `--ops-per-block`, `--randsrc-filename` or the
+hover flags.
 
 The run ends with `Benchmark Finished.`, `Total Ops: N` and `Duration: Ts`. Throughput is N / T operations per second;
 the paper converts it to transactions per second with 17.91 state operations per transaction (1,002,507,459 / 55,965,021).
+Every system prints `Total Ops: 1002507459`. QMDB then flushes, outside the timed region, and prints its 16 shard roots
+(`root shard=i ...`) and their digest, which is the same on every machine:
+```
+state_root_digest height=8933 45d8631819a032b4f4f25826ca2414d6bac62046f54ae2a63b915bfd456a59d3
+```
+
+Fig. 6 uses three instances with the same command except for the CPU list (and, on `r6gd.2xlarge`, the input paths):
+- `c7gd.metal` (Graviton3): `taskset -c 0-63`;
+- `c6id.16xlarge` (x86): `taskset -c 0-31`, one hyperthread per physical core (SMT unused);
+- `r6gd.2xlarge` (Graviton2): `taskset -c 0-7`. It has a single NVMe drive, formatted as ext4 and mounted at `/mnt/ssd`
+  without RAID (`sudo mkfs.ext4 -F /dev/nvme1n1 && sudo mount /dev/nvme1n1 /mnt/ssd`). This 441 GiB drive holds the
+  databases but cannot also hold NOMT's 382 GB hashtable and the 177 GB of inputs, so for all four systems the bundle
+  and the traces are read from a separate EBS gp3 volume (point `--init-db-path` and `--eth-trace-dir` at it).
 
 ### 6.4 QMDB-only sweeps (Fig. 7, Fig. 9, Fig. 10)
 
@@ -337,6 +379,7 @@ All results are printed to stdout.
 | `Results summary` … `<phase>: X/s` | throughput of the last phase of each kind, at the end of the run |
 | `Replay [x%] Block N \| TPS: ...` | Ethereum replay progress |
 | `Benchmark Finished.`, `Total Ops: N`, `Duration: Ts` | end of an Ethereum replay |
+| `root shard=i <hash>`, `state_root_digest height=H <hash>` | QMDB only: the shard Merkle roots after an Ethereum replay and their BLAKE3 digest (not timed) |
 
 ---
 
@@ -364,12 +407,14 @@ The engine in `crates/` differs from [LayerZero-Labs/qmdb](https://github.com/La
 - prefetcher job pool of 40,000 jobs instead of 4,000 (`crates/qmdb/src/prefetcher/mod.rs`);
 - io_uring completion waiting: when work is queued but every buffer is busy, a worker waits for one completion
   instead of up to 32 (`crates/qmdb/src/prefetcher/dioprefetcher.rs`);
+- with `QMDB_BIGBUF_MEMSET` set, large buffers are zeroed with memset instead of `calloc`
+  (`crates/qmdb-common/src/utils/mod.rs`; off by default, Section 6.3);
 - pruned entry-file segments are released from the io_uring registered-file tables, so their disk space is freed
   (`PruneCmd` from the flusher to the prefetcher workers);
 - the `pipeline_off` feature for the pipelining ablation (off by default);
 - debug instrumentation, commented-out code and LayerZero's RocksDB reference-model fuzz example were removed.
 
-The first two change performance only; none of the changes affects Merkle roots, proofs or durability.
+The first three change performance only; none of the changes affects Merkle roots, proofs or durability.
 
 ---
 
