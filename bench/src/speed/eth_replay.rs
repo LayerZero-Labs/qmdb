@@ -136,7 +136,7 @@ pub async fn run_block_data_producer(
 }
 
 /// Runs an ops-only producer: loads `{height}_operation_kv.bin` for up to
-/// `PREFETCH_BUFFER_BLOCKS` heights in parallel, sends in block order.
+/// `PREFETCH_BUFFER_BLOCKS` (or `ETH_PREFETCH`) heights in parallel, sends in block order.
 pub async fn run_ops_producer(
     start_height: u64,
     end_height: u64,
@@ -145,6 +145,9 @@ pub async fn run_ops_producer(
 ) -> anyhow::Result<()> {
     use futures::StreamExt;
     let dir = Arc::new(dir);
+    // ETH_PREFETCH overrides the number of concurrent block loads
+    let prefetch: usize = std::env::var("ETH_PREFETCH").ok().and_then(|v| v.parse().ok()).unwrap_or(PREFETCH_BUFFER_BLOCKS);
+    let par_load = std::env::var("ETH_PAR_LOAD").is_ok();
     let mut pending: BTreeMap<u64, Option<Vec<Operation>>> = BTreeMap::new();
     let mut next_to_send = start_height;
     let stream = futures::stream::iter(start_height..=end_height)
@@ -152,11 +155,22 @@ pub async fn run_ops_producer(
             let dir = Arc::clone(&dir);
             async move {
                 let ops_name = format!("{}_operation_kv.bin", height);
-                let r = load_optional_bincode::<Vec<Operation>>(dir.as_ref(), &ops_name).await;
+                // ETH_PAR_LOAD: read and decode on the blocking pool, so loads run in parallel
+                // (load_optional_bincode never yields, so buffer_unordered alone runs them one at a time)
+                let r = if par_load {
+                    tokio::task::spawn_blocking(move || {
+                        match read_bytes(dir.as_ref(), &ops_name)? {
+                            Some(bytes) => Ok(Some(decode_bincode::<Vec<Operation>>(&bytes)?)),
+                            None => Ok(None),
+                        }
+                    }).await.expect("load task panicked")
+                } else {
+                    load_optional_bincode::<Vec<Operation>>(dir.as_ref(), &ops_name).await
+                };
                 (height, r)
             }
         })
-        .buffer_unordered(PREFETCH_BUFFER_BLOCKS);
+        .buffer_unordered(prefetch);
 
     tokio::pin!(stream);
     while let Some((height, result)) = stream.next().await {

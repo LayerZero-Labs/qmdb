@@ -125,3 +125,19 @@ pub fn flush(_: usize) {}
 pub fn flush(table_id: usize) {
     crate::speed::qmdb::flush(table_id);
 }
+
+// Prints the shard Merkle roots and their digest after flush (QMDB only)
+#[cfg(any(feature = "use_nomt", feature = "use_reth", feature = "use_lvmt"))]
+pub fn print_root_hashes(_: usize) {}
+
+#[cfg(all(not(feature = "use_nomt"), not(feature = "use_reth"), not(feature = "use_lvmt")))]
+pub fn print_root_hashes(table_id: usize) {
+    let (h, roots) = crate::speed::qmdb::root_hashes(table_id);
+    let hex = |r: &[u8; 32]| r.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    for (i, r) in roots.iter().enumerate() { println!("root shard={i} {}", hex(r)); }
+    let mut all = Vec::new();
+    for r in &roots { all.extend_from_slice(r); }
+    let mut d = [0u8; 32];
+    qmdb_common::utils::hasher::blake3_hash_inplace(&mut d, &all);
+    println!("state_root_digest height={h} {}", hex(&d));
+}

@@ -1318,6 +1318,67 @@ fn run_eth_replay_from_bundle(
     );
 }
 
+/// Packs one DB block (up to 32 Ethereum blocks) exactly as the serial replay loop does:
+/// change sets of at most 10 ops with no repeated key, two change sets per task, and the partial
+/// change set and task closed at the end of the DB block.
+fn pack_eth_db_block(
+    blocks: Vec<(u64, Option<Vec<eth_replay::Operation>>)>,
+    boundary: &std::collections::HashMap<u64, Vec<eth_replay::Operation>>,
+) -> (Vec<parking_lot::RwLock<Option<SimpleTask>>>, u64) {
+    let ops_per_cset = 10;
+    let csets_per_task = 2;
+    let mut task_list: Vec<parking_lot::RwLock<Option<SimpleTask>>> = Vec::new();
+    let mut cset_list: Vec<ChangeSet> = Vec::with_capacity(csets_per_task);
+    let mut current_cset = ChangeSet::new();
+    let mut current_batch_keys: HashSet<Vec<u8>> = HashSet::new();
+    let mut n = 0u64;
+    {
+        let mut process_op = |op: &eth_replay::Operation| {
+            let (op_code, key_ref, val_ref) = match op {
+                eth_replay::Operation::Create(k, v) => (OP_CREATE, k, Some(v)),
+                eth_replay::Operation::Update(k, v) => (OP_WRITE, k, Some(v)),
+                eth_replay::Operation::Delete(k)    => (OP_DELETE, k, None),
+                eth_replay::Operation::Read(k, v)   => (OP_READ, k, Some(v)),
+            };
+            if current_batch_keys.contains(key_ref) {
+                current_cset.sort();
+                cset_list.push(std::mem::replace(&mut current_cset, ChangeSet::new()));
+                current_batch_keys.clear();
+                if cset_list.len() >= csets_per_task {
+                    let task = SimpleTask::new(std::mem::replace(&mut cset_list, Vec::with_capacity(csets_per_task)));
+                    task_list.push(parking_lot::RwLock::new(Some(task)));
+                }
+            }
+            let kh = qmdb_common::entryfile::entry::entry_key_hash(key_ref);
+            let val_slice = val_ref.map(|v| v.as_slice()).unwrap_or(&[]);
+            current_cset.add_op(op_code, &kh, key_ref, val_slice, None);
+            current_batch_keys.insert(key_ref.clone());
+            n += 1;
+            if current_cset.op_list.len() >= ops_per_cset {
+                current_cset.sort();
+                cset_list.push(std::mem::replace(&mut current_cset, ChangeSet::new()));
+                current_batch_keys.clear();
+                if cset_list.len() >= csets_per_task {
+                    let task = SimpleTask::new(std::mem::replace(&mut cset_list, Vec::with_capacity(csets_per_task)));
+                    task_list.push(parking_lot::RwLock::new(Some(task)));
+                }
+            }
+        };
+        for (h, ops_opt) in &blocks {
+            if let Some(b_ops) = boundary.get(h) { for op in b_ops { process_op(op); } }
+            if let Some(ops) = ops_opt { for op in ops { process_op(op); } }
+        }
+    }
+    if !current_cset.op_list.is_empty() {
+        current_cset.sort();
+        cset_list.push(current_cset);
+    }
+    if !cset_list.is_empty() {
+        task_list.push(parking_lot::RwLock::new(Some(SimpleTask::new(cset_list))));
+    }
+    (task_list, n)
+}
+
 fn run_eth_replay_inner(
     table_id: usize,
     input_dir: Option<&str>,
@@ -1469,7 +1530,9 @@ fn run_eth_replay_inner(
     // Producer runs ahead in background, main loop drains from channel.
     println!("\n=== Streaming replay ops [{}, {}] (queue=50 blocks) ===", replay_start, replay_end);
     let source_stream = source.clone().expect("eth-trace-dir is required for Phase 3 replay");
-    let (tx_stream, mut rx_stream) = tokio::sync::mpsc::channel(50);
+    // ETH_PAR_PACK=N packs DB blocks on N threads (same tasks as the serial path)
+    let par_pack: usize = std::env::var("ETH_PAR_PACK").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let (tx_stream, mut rx_stream) = tokio::sync::mpsc::channel(if par_pack > 0 { 1024 } else { 50 });
     let source_pre = source_stream.clone();
     rt.spawn(async move {
         eth_replay::run_ops_producer(replay_start, replay_end, source_pre, tx_stream).await
@@ -1504,6 +1567,7 @@ fn run_eth_replay_inner(
     let mut interval_ops = 0;
 
 
+    if par_pack == 0 {
     rt.block_on(async {
         let mut eth_block_counter = 0;
         
@@ -1615,6 +1679,62 @@ fn run_eth_replay_inner(
             global_db_height += 1;
         }
     });
+    } else {
+    let pool = rayon::ThreadPoolBuilder::new().num_threads(par_pack)
+        .thread_name(|i| format!("eth-pack-{i}")).build().unwrap();
+    let boundary_ops = std::sync::Arc::new(boundary_ops);
+    let max_inflight = par_pack * 4;
+    println!("Parallel packing: {} threads, {} DB blocks in flight", par_pack, max_inflight);
+    rt.block_on(async {
+        let mut group: Vec<(u64, Option<Vec<eth_replay::Operation>>)> = Vec::with_capacity(eth_blocks_per_db_block);
+        let mut pending: std::collections::VecDeque<std::sync::mpsc::Receiver<(Vec<parking_lot::RwLock<Option<SimpleTask>>>, u64)>> =
+            std::collections::VecDeque::new();
+        let mut done = false;
+        while !done {
+            match rx_stream.recv().await {
+                Some(m) => {
+                    let (h, ops_opt) = m.expect("streaming read failed");
+                    if ops_opt.is_none() && boundary_ops.get(&h).is_none() { continue; }
+                    group.push((h, ops_opt));
+                    processed_eth_blocks += 1;
+                    if group.len() < eth_blocks_per_db_block { continue; }
+                }
+                None => { done = true; if group.is_empty() { continue; } }
+            }
+            let g = std::mem::replace(&mut group, Vec::with_capacity(eth_blocks_per_db_block));
+            let (rtx, rrx) = std::sync::mpsc::sync_channel(1);
+            let b = std::sync::Arc::clone(&boundary_ops);
+            pool.spawn(move || { let _ = rtx.send(pack_eth_db_block(g, &b)); });
+            pending.push_back(rrx);
+            // deliver finished DB blocks in order; block only when too many are in flight
+            while let Some(front) = pending.front() {
+                let r = if pending.len() > max_inflight { front.recv().ok() } else { front.try_recv().ok() };
+                let Some((tasks, n)) = r else { break };
+                pending.pop_front();
+                total_ops += n; interval_ops += n;
+                if !tasks.is_empty() {
+                    db_tx.send((global_db_height, tasks)).unwrap();
+                    global_db_height += 1;
+                }
+            }
+            if interval_start.elapsed().as_secs() >= 3 {
+                let elapsed = interval_start.elapsed().as_secs_f64();
+                let progress = (processed_eth_blocks as f64 / total_blocks as f64) * 100.0;
+                println!("Replay [{:.1}%] Block {} | TPS: {:.0} ops/s", progress, replay_start + processed_eth_blocks, interval_ops as f64 / elapsed);
+                interval_start = Instant::now();
+                interval_ops = 0;
+            }
+        }
+        while let Some(front) = pending.pop_front() {
+            let (tasks, n) = front.recv().unwrap();
+            total_ops += n;
+            if !tasks.is_empty() {
+                db_tx.send((global_db_height, tasks)).unwrap();
+                global_db_height += 1;
+            }
+        }
+    });
+    }
 
     // 4. Wait until the queue is drained, as in the hover test
     drop(db_tx); 
@@ -1624,6 +1744,10 @@ fn run_eth_replay_inner(
     println!("Benchmark Finished.");
     println!("Total Ops: {}", total_ops);
     println!("Duration: {:.2}s", total_duration.as_secs_f64());
+
+    // Result check (not timed): flush, then print the state roots (QMDB only)
+    db_backend::flush(table_id);
+    db_backend::print_root_hashes(table_id);
 }
 
 fn rand_between_seg_idx(

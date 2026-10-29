@@ -54,6 +54,15 @@ pub fn flush(tid: usize) {
     }
 }
 
+/// Current height and the 16 shard Merkle roots (call after flush)
+pub fn root_hashes(tid: usize) -> (i64, Vec<[u8; 32]>) {
+    let ads = unsafe { ADS[tid].as_ref().unwrap() };
+    let meta = ads.get_shared().ads.get_metadb();
+    let m = meta.read();
+    let roots = (0..qmdb_common::def::SHARD_COUNT).map(|i| m.get_root_hash(i)).collect();
+    (m.get_curr_height(), roots)
+}
+
 pub fn get_ads(tid: usize) -> AdsWrap<SimpleTask> {
     unsafe { ADS[tid].take().unwrap() }
 }
