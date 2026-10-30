@@ -92,8 +92,8 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 
 LVMT is a git submodule, so clone recursively (or run `git submodule update --init` in an existing clone):
 ```bash
-git clone --recursive https://github.com/CMU-SijieC/QMDB-Benchmark.git
-cd QMDB-Benchmark
+git clone --recursive https://github.com/LayerZero-Labs/qmdb.git
+cd qmdb
 ```
 
 ### 3.2 Storage
