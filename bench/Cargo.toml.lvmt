@@ -1,0 +1,72 @@
+[package]
+name = "bench"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+qmdb = { workspace = true, default-features = true }
+byteorder = { workspace = true }
+threadpool = { workspace = true }
+rayon = { workspace = true }
+parking_lot = { workspace = true, features = ["arc_lock"] }
+memory-stats = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+serde = { workspace = true, features = ["derive"] }
+chrono = { workspace = true, features = ["serde"] }
+hex = { workspace = true }
+log = { workspace = true }
+once_cell = { workspace = true }
+qmdb-common = { workspace = true }
+crossbeam = { workspace = true }
+libc = "0.2"
+lazy_static = "1.4.0"
+sha2 = "0.10"
+fxhash = "0.2"
+bincode = "1.3"
+anyhow = { workspace = true }
+futures = "0.3"
+
+nomt = { path = "../nomt/nomt", optional = true }
+nomt-core = { path = "../nomt/core", optional = true }
+
+# LVMT dependencies (use_lvmt feature)
+lvmt-db = { path = "../lvmt/asb-authdb/lvmt-db", optional = true, features = ["large_lvmt"] }
+kvdb = { version = "0.4", optional = true }
+cfx-kvdb-rocksdb = { path = "../lvmt/asb-backend/cfx-kvdb-rocksdb", optional = true }
+
+# reth-* deps removed: cfx-kvdb-rocksdb (zstd-sys ^1) and reth-primitives (zstd-sys ^2)
+# both declare links="zstd" and conflict at Cargo resolution time even as optional deps.
+# To run reth benchmarks, use a separate workspace member.
+# reth-db = { path = "../reth/crates/storage/db", optional = true, features = ["test-utils"] }
+# reth-db-api = { path = "../reth/crates/storage/db-api", optional = true, features = ["test-utils"] }
+# reth-trie = { path = "../reth/crates/trie/trie", optional = true }
+# reth-trie-common = { path = "../reth/crates/trie/common", optional = true }
+# reth-trie-db = { path = "../reth/crates/trie/db", optional = true }
+# reth-trie-parallel = { path = "../reth/crates/trie/parallel", optional = true }
+# reth-provider = { path = "../reth/crates/storage/provider", optional = true, features = ["test-utils"] }
+# reth-primitives = { path = "../reth/crates/primitives", optional = true }
+# reth-node-types = { path = "../reth/crates/node/types", optional = true }
+# alloy-primitives = { version = "0.8.26", optional = true }
+
+tokio.workspace = true
+rand = { version = "0.10.0", features = ["std", "std_rng"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+procfs = { version = "0.17", features = ["serde1", "chrono"] }
+tikv-jemallocator = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bin]]
+name = "speed"
+
+[features]
+default = []
+use_nomt = ["dep:nomt", "dep:nomt-core"]
+use_lvmt = ["dep:lvmt-db", "dep:kvdb", "dep:cfx-kvdb-rocksdb"]
+# use_reth disabled: reth deps conflict with cfx-kvdb-rocksdb via zstd-sys links
+use_reth = []
+
+

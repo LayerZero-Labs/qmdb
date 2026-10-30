@@ -145,8 +145,6 @@ struct ProofPath {
     pub root: [u8; 32],
 }
 
-const OTHER_NODE_COUNT: usize = 1 + 11 + 1 + 3 + 1;
-
 impl Default for ProofPath {
     fn default() -> Self {
         Self::new()

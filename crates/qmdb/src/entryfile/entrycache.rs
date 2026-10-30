@@ -142,7 +142,6 @@ impl EntryCache {
                 // total entry count
                 shard_data.extend_from_slice((total_entry_count as u64).to_le_bytes().as_slice());
                 // TODO: check the size
-                // assert!(shard_data.len() <= size);
                 shard_data
             })
             .collect();

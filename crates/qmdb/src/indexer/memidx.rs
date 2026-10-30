@@ -105,7 +105,6 @@ impl Unit {
         *last_k = k;
         if v6 == NIL_MARKER || same_bucket {
             // NIL_MARKER cannot be stored in big_list
-            //println!("small append {:#018x} {}", k, hex::encode(v6));
             self.small_set.insert((k, *v6));
             return;
         }
@@ -114,15 +113,10 @@ impl Unit {
     }
 
     fn dump_to(&self, out: &mut Self) {
-        //println!("==dump_to small={:?}", out.small_set);
-        //out.big_list.print();
         let mut offsets_idx = usize::MAX;
         let mut last_k = u64::MAX;
         let mut iter = self.small_set.iter();
         let mut kv = iter.next();
-        //if let Some(kv) = kv {
-        //    println!("small get {:#018x} {}", kv.0, hex::encode(kv.1));
-        //}
         let mut cursor = self.big_list.get_first_cursor();
         while cursor.valid() {
             let elem = self.big_list.at(&cursor);
@@ -134,9 +128,6 @@ impl Unit {
             while kv.is_some() && kv.unwrap().0 < k_hi32 {
                 out.append(&mut offsets_idx, &mut last_k, kv.unwrap().0, &kv.unwrap().1);
                 kv = iter.next();
-                //if let Some(kv) = kv {
-                //    println!("small get {:#018x} {}", kv.0, hex::encode(kv.1));
-                //}
             }
             out.append(&mut offsets_idx, &mut last_k, k_hi32, &file_pos);
             self.big_list.move_forward(&mut cursor);
@@ -144,12 +135,7 @@ impl Unit {
         while kv.is_some() {
             out.append(&mut offsets_idx, &mut last_k, kv.unwrap().0, &kv.unwrap().1);
             kv = iter.next();
-            //if let Some(kv) = kv {
-            //    println!("small get {:#018x} {}", kv.0, hex::encode(kv.1));
-            //}
         }
-        //println!("===DumpDone small: {:?}", out.small_set);
-        //out.big_list.print();
     }
 
     fn find_kv(&self, k: u64, v6: &[u8; 6]) -> (KVCursor, bool) {
@@ -159,7 +145,6 @@ impl Unit {
         while cursor.valid() {
             let elem = self.big_list.at(&cursor);
             let (k_hi32, _) = Self::split_kv(&elem);
-            //println!("NOW elem={:?} k10={:?} k_hi32={:#018x} k={:#018x}", elem, k10, k_hi32, k);
             if (k_hi32 >> 32) != (k >> 32) {
                 break;
             }
@@ -257,7 +242,6 @@ impl UnitTrait for Unit {
     }
 
     fn add_kv(&mut self, k: u64, v: i64) {
-        //println!("small_set insert k={:#018x} v={:#018x}", k, v);
         let v6 = Self::to_v6(v);
         let success = self.small_set.insert((k, v6));
         assert!(
@@ -266,21 +250,18 @@ impl UnitTrait for Unit {
             k,
             hex::encode(v6)
         );
-        //println!("add_kv k={:#016x} v={}", k, hex::encode(&v6));
         self.size += 1;
     }
 
     fn erase_kv(&mut self, k: u64, v: i64) {
         self.size -= 1;
         let v6 = Self::to_v6(v);
-        //println!("erase_kv k={:#016x} v={}", k, hex::encode(&v6));
         let (cursor, found_it) = self.find_kv(k, &v6);
         if found_it {
             self.num_of_nil += 1;
             self.big_list.change(&cursor, NIL_MARKER);
             return;
         }
-        //println!("small erase {:#018x} {}", k, hex::encode(v6));
         let removed = self.small_set.remove(&(k, v6));
         assert!(
             removed,
@@ -294,7 +275,6 @@ impl UnitTrait for Unit {
         let v6 = Self::to_v6(v_old);
         let v6_new = Self::to_v6(v_new);
         let (cursor, found_it) = self.find_kv(k, &v6);
-        //println!("change_kv k={:#016x} v={} found_it={}", k, hex::encode(&v6), found_it);
         if found_it {
             //NIL_MARKER is just an nullification marker in big_list
             if &v6_new == NIL_MARKER {
@@ -304,7 +284,6 @@ impl UnitTrait for Unit {
             self.big_list.change(&cursor, &v6_new);
             return;
         }
-        //println!("WHY small={:?}", self.small_set);
         let removed = self.small_set.remove(&(k, v6));
         assert!(
             removed,
@@ -320,9 +299,6 @@ impl UnitTrait for Unit {
     }
 
     fn compact(&mut self) {
-        //println!("======== start compact ===========");
-        //println!("== small={:?}", self.small_set);
-        //self.big_list.print();
         let mut out = Self {
             size: 0,
             num_of_nil: 0,
@@ -337,7 +313,6 @@ impl UnitTrait for Unit {
             out.size
         );
         std::mem::swap(self, &mut out);
-        //println!("======== end compact ===========");
     }
 
     fn for_each_value<F>(&self, k: u64, access: F)
@@ -427,12 +402,6 @@ impl UnitTrait for Unit {
     }
 }
 
-fn print_set(hash_set: &HashSet<i64>) {
-    for pos in hash_set.iter() {
-        println!("pos={:#016x}", pos);
-    }
-}
-
 // only used in fuzz test
 pub struct Unit4Test {
     pub u: Unit,
@@ -476,8 +445,6 @@ impl UnitTrait for Unit4Test {
         let r = self.ref_u.debug_get_values(0, k);
         let i = self.u.debug_get_values(k);
         if r != i {
-            //println!("r={r:?}\ni={i:?}");
-            //println!("possible for_each_value mismatch k={k:#016x}");
             for e in r.iter() {
                 if !i.contains(e) {
                     panic!("Fatal for_each_adjacent_value mismatch");
@@ -494,11 +461,6 @@ impl UnitTrait for Unit4Test {
         let r = self.ref_u.debug_get_adjacent(&k80, 0, k);
         let i = self.u.debug_get_adjacent(&k80, k);
         if r != i {
-            //println!("=====ref====== k80={}", hex::encode(k80));
-            //print_set(&r);
-            //println!("=====imp======");
-            //print_set(&i);
-            //println!("possible for_each_adjacent_value mismatch");
             for e in r.iter() {
                 if !i.contains(e) {
                     panic!("FATAL for_each_adjacent_value mismatch");
@@ -568,8 +530,7 @@ impl<U: UnitTrait + 'static> InMemIndexerGeneric<U> {
 
     pub fn start_compacting(indexer: Arc<Self>) {
         let len = indexer.units.len();
-        Self::_start_compacting(indexer.clone(), 0, len); // / 2);
-                                                          //Self::_start_compacting(indexer, len / 2, len);
+        Self::_start_compacting(indexer.clone(), 0, len);
     }
 
     fn _start_compacting(indexer: Arc<Self>, start: usize, end: usize) {

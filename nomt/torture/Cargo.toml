@@ -1,0 +1,31 @@
+[package]
+name = "torture"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+nix.workspace = true
+libc.workspace = true
+anyhow.workspace = true
+cfg-if.workspace = true
+serde.workspace = true
+bincode.workspace = true
+nomt = { path = "../nomt" }
+tokio.workspace = true
+tokio-util.workspace = true
+tokio-stream.workspace = true
+futures.workspace = true
+tempfile.workspace = true
+rand.workspace = true
+rand_pcg.workspace = true
+rand_distr.workspace = true
+imbl.workspace = true
+tokio-serde.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+hex.workspace = true
+futures-util.workspace = true
+clap.workspace = true
+trickfs = { path = "../trickfs" }
+which.workspace = true
+ruint.workspace = true

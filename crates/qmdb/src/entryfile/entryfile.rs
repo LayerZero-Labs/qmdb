@@ -7,7 +7,6 @@ use hpfile::{AlignedBuf512, HPFile, PreReader};
 use qmdb_common::def::{DEFAULT_ENTRY_SIZE, HPFILE_RANGE, NONCE_SIZE, TAG_SIZE};
 use qmdb_common::entryfile::entry::EntryBz;
 use qmdb_common::entryfile::readbuf::ReadBuf;
-use std::fs::File;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 
@@ -412,24 +411,10 @@ impl EntryFileWithPreReader {
         F: FnMut(&[u8], &[u8], i64, u64),
     {
         let mut pos = start_pos;
-        // let mut last_pos = start_pos;
         let size = self.entry_file.size();
-        // let total = size - start_pos;
-        // let step = total / 20;
         let mut buf = Vec::with_capacity(DEFAULT_ENTRY_SIZE);
 
         while pos < size {
-            /* debug print
-            if (pos - start_pos) / step != (last_pos - start_pos) / step {
-                println!(
-                    "ScanEntriesLite {:.2} {}/{}",
-                    (pos - start_pos) as f64 / total as f64,
-                    pos - start_pos,
-                    total
-                );
-            }
-            */
-            // last_pos = pos;
             let read_len = self.read_entry(pos, size, &mut buf).unwrap();
             if read_len == 0 {
                 panic!("Met file end when reading at {pos}");

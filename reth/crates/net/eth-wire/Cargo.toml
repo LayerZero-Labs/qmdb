@@ -1,0 +1,78 @@
+[package]
+name = "reth-eth-wire"
+description = "Implements the eth/64 and eth/65 P2P protocols"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# reth
+reth-chainspec.workspace = true
+reth-codecs.workspace = true
+reth-primitives.workspace = true
+reth-ecies.workspace = true
+alloy-rlp = { workspace = true, features = ["derive"] }
+reth-eth-wire-types.workspace = true
+reth-network-peers.workspace = true
+
+# ethereum
+alloy-primitives.workspace = true
+
+# metrics
+reth-metrics.workspace = true
+
+bytes.workspace = true
+derive_more.workspace = true
+thiserror.workspace = true
+serde = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["macros", "net", "sync", "time"] }
+tokio-util = { workspace = true, features = ["io", "codec"] }
+futures.workspace = true
+tokio-stream.workspace = true
+pin-project.workspace = true
+tracing.workspace = true
+snap = "1.0.5"
+
+# arbitrary utils
+arbitrary = { workspace = true, features = ["derive"], optional = true }
+
+[dev-dependencies]
+reth-primitives = { workspace = true, features = ["arbitrary"] }
+reth-eth-wire-types = { workspace = true, features = ["arbitrary"] }
+reth-tracing.workspace = true
+
+test-fuzz.workspace = true
+tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
+tokio-util = { workspace = true, features = ["io", "codec"] }
+rand.workspace = true
+secp256k1 = { workspace = true, features = [
+    "global-context",
+    "rand-std",
+    "recovery",
+] }
+
+arbitrary = { workspace = true, features = ["derive"] }
+proptest.workspace = true
+proptest-arbitrary-interop.workspace = true
+async-stream.workspace = true
+serde.workspace = true
+alloy-eips.workspace = true
+
+[features]
+arbitrary = [
+    "reth-primitives/arbitrary",
+    "reth-eth-wire-types/arbitrary",
+    "dep:arbitrary",
+]
+serde = ["dep:serde", "reth-eth-wire-types/serde"]
+
+[[test]]
+name = "fuzz_roundtrip"
+path = "tests/fuzz_roundtrip.rs"
+required-features = ["arbitrary", "serde"]

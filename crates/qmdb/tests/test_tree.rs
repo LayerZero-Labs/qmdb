@@ -586,8 +586,6 @@ fn test_tree_append_entry() {
     tree.close();
 }
 
-// --- helper functions ---
-
 fn assert_zero(tree: &Tree, pos: tree::NodePos) {
     let zero = [0u8; 32];
     let v = tree.upper_tree.get_node(pos);
@@ -653,7 +651,7 @@ fn max_n_plus_1_at_level(youngest_twig_id: u64, level: u8) -> u64 {
 fn check_node_existence(tree: &Tree, start: u64, end: u64) {
     let max_level = calc_max_level(end);
     for level in FIRST_LEVEL_ABOVE_TWIG..=max_level {
-        let s: u64 = 0; // nth_at_level_from_twigid(start, level)
+        let s: u64 = 0;
         let e = max_n_plus_1_at_level(end, level as u8);
         for i in s..e {
             if tree

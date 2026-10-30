@@ -1,0 +1,16 @@
+[package]
+name = "witness_verification"
+version = "0.1.0"
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+nomt-core = { path = "../../core"  }
+commit-batch = { path = "../commit_batch"  }
+anyhow = "1.0.81"
+blake3 = "1.5.1"

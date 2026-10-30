@@ -134,6 +134,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::thread;
 use threadpool::ThreadPool;
+use crate::prefetcher::dioprefetcher::PruneCmd;
 
 use crate::compactor::{CompactJob, Compactor};
 use crate::entryfile::{EntryCache, EntryFile, ExtEntryFile};
@@ -146,7 +147,7 @@ use crate::metadb::{MetaDB, MetaInfo};
 use crate::tasks::{BlockPairTaskHub, TaskHub, TasksManager};
 use crate::updater::Updater;
 use crate::utils::ringchannel;
-use log::{debug, info};
+use log::info;
 use qmdb_common::def::{
     calc_max_level, COMPACT_RING_SIZE, DEFAULT_ENTRY_SIZE, SENTRY_COUNT, SHARD_COUNT, TWIG_SHIFT,
 };
@@ -200,6 +201,7 @@ pub struct AdsCore {
     bypass_prefetcher: bool,
     /// Optional prefetcher for performance optimization
     prefetcher: Option<Arc<Prefetcher>>,
+    prune_receiver: crossbeam::channel::Receiver<PruneCmd>,
 }
 
 /// Generates encryption ciphers for secure storage.
@@ -315,6 +317,14 @@ impl AdsCore {
     ) -> (Self, crossbeam::channel::Receiver<Arc<MetaInfo>>, Flusher) {
         let (ciphers, idx_cipher, meta_db_cipher) = get_ciphers(aes_keys);
         let (data_dir, meta_dir, indexer_dir) = Self::get_sub_dirs(dir);
+        
+        // With the DIO prefetcher every prune notification must arrive, since it releases
+        // disk space, so the channel is unbounded. Without it nothing reads the channel, so
+        // it is bounded and the flusher's try_send drops what does not fit.
+        #[cfg(all(target_os = "linux", not(feature = "disable_dio")))]
+        let (prune_sender, prune_receiver) = unbounded();
+        #[cfg(not(all(target_os = "linux", not(feature = "disable_dio"))))]
+        let (prune_sender, prune_receiver) = bounded(1024);
 
         let indexer = Arc::new(Indexer::with_dir_and_cipher(indexer_dir, idx_cipher));
         let (eb_sender, eb_receiver) = bounded(2);
@@ -347,13 +357,14 @@ impl AdsCore {
             )));
         }
 
-        let max_kept_height = 10; //1000;
+        let max_kept_height = 10;
         let flusher = Flusher::new(
             shards,
             meta.clone(),
             curr_height,
             max_kept_height,
             eb_sender,
+            prune_sender,
         );
 
         let (task_sender, _) = channel::bounded(1); // TODO: init none
@@ -369,6 +380,7 @@ impl AdsCore {
             bypass_prefetcher,
             proof_req_senders: flusher.get_proof_req_senders(),
             prefetcher: None,
+            prune_receiver,
         };
         (ads_core, eb_receiver, flusher)
     }
@@ -579,7 +591,6 @@ impl AdsCore {
         shard_id: usize,
         cipher: Option<Aes256Gcm>,
     ) -> (Tree, i64, u64) {
-        // let meta = meta.read_arc();
         let oldest_active_sn = meta.get_oldest_active_sn(shard_id);
         let youngest_twig_id = meta.get_youngest_twig_id(shard_id);
         let edge_nodes = bytes_to_edge_nodes(&meta.get_edge_nodes(shard_id));
@@ -871,6 +882,10 @@ impl AdsCore {
 
         let (task_sender, task_receiver) = channel::unbounded();
         self.task_sender = task_sender;
+
+        // Drop the old EntryFile references
+        self.ext_entry_files.clear();
+
         for shard_id in 0..SHARD_COUNT {
             let (mid_sender, mid_receiver) = unbounded();
             let entryfile_size = meta.get_entry_file_size(shard_id);
@@ -880,6 +895,7 @@ impl AdsCore {
             let (u_eb_wr, u_eb_rd) = entrybuffer::new(entryfile_size, buf_margin);
 
             let entry_file = flusher.get_entry_file(shard_id);
+
             self.mid_senders.push(mid_sender.clone());
 
             job_man.add_shard(u_eb_wr.entry_buffer.clone(), entry_file.clone(), mid_sender);
@@ -929,6 +945,7 @@ impl AdsCore {
             self.indexer.clone(),
             Arc::new(ThreadPool::new(prefetcher_thread_count)),
             job_man,
+            self.prune_receiver.clone(), // receiver of pruned segments
         ));
         self.prefetcher = Some(prefetcher.clone());
         if !self.bypass_prefetcher {
@@ -1217,7 +1234,13 @@ impl<T: Task + 'static> AdsWrap<T> {
         self.cache = cache;
 
         let mut meta_info = Option::None;
-        if self.task_hub.free_slot_count() == 0 {
+        // pipeline_off: wait until every in-flight block has finished (both slots free),
+        // so consecutive blocks never overlap (pipeline depth 1 instead of 2).
+        #[cfg(feature = "pipeline_off")]
+        let need_free: usize = 2;
+        #[cfg(not(feature = "pipeline_off"))]
+        let need_free: usize = 1;
+        while self.task_hub.free_slot_count() < need_free {
             // adscore and task_hub are busy, wait for them to finish an old block
             let _meta_info = self.end_block_chan.recv().unwrap();
             self.task_hub.end_block(_meta_info.curr_height);
@@ -1593,3 +1616,4 @@ mod tests {
         assert_eq!(r[1].curr_height, 3);
     }
 }
+

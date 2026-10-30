@@ -11,7 +11,7 @@ use crate::indexer::Indexer;
 use crate::tasks::TaskHub;
 use atomptr::{AtomPtr, Ref};
 use crossbeam::channel::{bounded, unbounded, Receiver, Sender};
-use hpfile::{AlignedBuf512, IO_BLK_SIZE};
+use hpfile::AlignedBuf512;
 use io_uring::{cqueue, opcode, squeue, types, IoUring};
 use log::debug;
 use qmdb_common::def::{DEFAULT_ENTRY_SIZE, OP_CREATE, OP_DELETE, SHARD_COUNT};
@@ -42,21 +42,47 @@ const MAX_WAIT: usize = 32;
 /// Maximum registered files: 16 shards × 256 segments = 4096
 const MAX_REGISTERED_FILES: u32 = 16 * 256;
 
-/// Lazy-registered file descriptor manager
+/// Number of SSD reads submitted to io_uring so far. The benchmark polls it to time a
+/// Read phase until the prefetcher has issued its last read.
+pub static DIO_READ_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn dio_read_count() -> u64 {
+    DIO_READ_COUNT.load(Ordering::Relaxed)
+}
+
+/// Sent by the flusher just before it prunes: every entry-file segment of `shard_id`
+/// with an id below `end_seg_id` is being deleted. Each command covers all earlier ones.
+#[derive(Debug, Clone, Copy)]
+pub struct PruneCmd {
+    pub shard_id: usize,
+    pub end_seg_id: usize,
+}
+
+/// Registration key of a (shard, segment) pair.
+fn seg_key(shard_id: usize, seg_id: u64) -> u64 {
+    ((shard_id as u64) << 56) | (seg_id & ((1u64 << 56) - 1))
+}
+
+fn key_shard(key: u64) -> usize {
+    (key >> 56) as usize
+}
+
+fn key_seg(key: u64) -> u64 {
+    key & ((1u64 << 56) - 1)
+}
+
 struct RegisteredFiles {
-    /// (shard_id, segment_id) → slot_index mapping
-    ///
-    /// Key point: Cannot use RawFd alone as key.
-    /// - prune removes/closes segment's File/FD
-    /// - OS may reuse the same fd number for another file
-    /// - io_uring fixed-file slot binds to "struct file at registration time", not "fd number"
-    /// Therefore must use "file identity" (here shard + segment_id) as key to avoid fd reuse causing wrong file reads.
     key_to_slot: HashMap<u64, u16>,
-    /// Next available slot
     next_slot: u16,
-    /// Pending (key, fd) list (cached when immediate registration not possible)
     pending: Vec<(u64, RawFd)>,
     pending_keys: HashSet<u64>,
+    /// Slots released by pruned segments, reused before new ones.
+    free_slots: Vec<u16>,
+    /// Per shard: segments below this id have been pruned and are never registered again.
+    pruned_below: [u64; SHARD_COUNT],
+    /// Slots whose clearing failed: they still hold a deleted segment, so they are retried
+    /// before they can be reused.
+    uncleared: Vec<u16>,
 }
 
 impl RegisteredFiles {
@@ -66,51 +92,118 @@ impl RegisteredFiles {
             next_slot: 0,
             pending: Vec::new(),
             pending_keys: HashSet::with_capacity(256),
+            free_slots: Vec::with_capacity(256),
+            pruned_below: [0; SHARD_COUNT],
+            uncleared: Vec::new(),
         }
     }
 
-    /// Look up registered key, return slot_index
-    /// If not registered, add (key, fd) to pending list, return None
     fn lookup_or_mark_pending(&mut self, key: u64, fd: RawFd) -> Option<u16> {
-        // Already registered, return directly
         if let Some(&slot) = self.key_to_slot.get(&key) {
             return Some(slot);
         }
-        // Limit exceeded, return None (use regular fd)
-        if self.next_slot as u32 >= MAX_REGISTERED_FILES {
+        if key_seg(key) < self.pruned_below[key_shard(key)] {
             return None;
         }
-        // Mark as pending registration
+        if self.free_slots.is_empty() && self.next_slot as u32 >= MAX_REGISTERED_FILES {
+            return None;
+        }
         if self.pending_keys.insert(key) {
             self.pending.push((key, fd));
         }
         None
     }
 
-    /// Process all pending fd registrations (must be called after submission queue is released)
+    /// Applies the queued prune notifications, but only while no SQE is waiting in the
+    /// submission queue: a cleared slot must not be referenced by an unsubmitted SQE.
+    /// Otherwise they stay queued until the next call.
+    fn apply_prunes<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
+        &mut self,
+        ring: &mut IoUring<S, C>,
+        prunes: &mut Vec<PruneCmd>,
+    ) {
+        if prunes.is_empty() && self.uncleared.is_empty() {
+            return;
+        }
+        if !ring.submission().is_empty() {
+            return;
+        }
+        for slot in std::mem::take(&mut self.uncleared) {
+            self.clear_slot(ring, slot);
+        }
+        for cmd in prunes.drain(..) {
+            self.prune(ring, cmd.shard_id, cmd.end_seg_id as u64);
+        }
+    }
+
+    /// Clears `slot`, dropping this ring's reference to its file, and makes it reusable.
+    /// A failed clear (e.g. ENOMEM) is kept in `uncleared` and retried.
+    fn clear_slot<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
+        &mut self,
+        ring: &IoUring<S, C>,
+        slot: u16,
+    ) {
+        if ring.submitter().register_files_update(slot as u32, &[-1]).is_ok() {
+            self.free_slots.push(slot);
+        } else {
+            self.uncleared.push(slot);
+        }
+    }
+
+    /// Unregisters every segment of `shard_id` below `end_seg_id`. Clearing a slot drops
+    /// this ring's reference to the deleted segment file, so its disk space is released
+    /// once in-flight reads of it complete, instead of when the process exits. The slot
+    /// is then reused.
+    fn prune<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
+        &mut self,
+        ring: &IoUring<S, C>,
+        shard_id: usize,
+        end_seg_id: u64,
+    ) {
+        let start = self.pruned_below[shard_id];
+        if end_seg_id <= start {
+            return;
+        }
+        for seg_id in start..end_seg_id {
+            if let Some(slot) = self.key_to_slot.remove(&seg_key(shard_id, seg_id)) {
+                self.clear_slot(ring, slot);
+            }
+        }
+        let is_pruned = |key: u64| key_shard(key) == shard_id && key_seg(key) < end_seg_id;
+        self.pending.retain(|&(key, _)| !is_pruned(key));
+        self.pending_keys.retain(|&key| !is_pruned(key));
+        self.pruned_below[shard_id] = end_seg_id;
+    }
+
     fn flush_pending<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
         &mut self,
         ring: &IoUring<S, C>,
     ) {
-        // Need to sync clear pending_keys after drain
         let mut leftovers: Vec<(u64, RawFd)> = Vec::new();
         for (key, fd) in self.pending.drain(..) {
-            if self.next_slot as u32 >= MAX_REGISTERED_FILES {
+            let slot = if let Some(s) = self.free_slots.pop() {
+                s
+            } else if (self.next_slot as u32) < MAX_REGISTERED_FILES {
+                let s = self.next_slot;
+                self.next_slot += 1;
+                s
+            } else {
                 leftovers.push((key, fd));
                 continue;
-            }
-            let slot = self.next_slot;
+            };
+
             if ring
                 .submitter()
                 .register_files_update(slot as u32, &[fd])
                 .is_ok()
             {
                 self.key_to_slot.insert(key, slot);
-                self.next_slot += 1;
             } else {
+                self.free_slots.push(slot);
                 leftovers.push((key, fd));
             }
         }
+        
         self.pending = leftovers;
         self.pending_keys.clear();
         for (key, _) in self.pending.iter() {
@@ -176,6 +269,8 @@ pub struct JobManager {
     uring_count: usize,
     /// Size of each io_uring instance
     uring_size: u32,
+    /// 【added】
+    pub prune_receiver: Option<Receiver<PruneCmd>>,
 }
 
 /// Per-io_uring-worker tracking for a job.
@@ -205,8 +300,11 @@ impl Prefetcher {
         cache: Arc<EntryCache>,
         indexer: Arc<Indexer>,
         tpool: Arc<ThreadPool>,
-        job_man: JobManager,
+        mut job_man: JobManager,
+        prune_receiver: Receiver<PruneCmd>,
     ) -> Self {
+        job_man.prune_receiver = Some(prune_receiver);
+
         let uring_count = job_man.uring_count;
         let (job_man, bck_receiver, warmup_bck_receivers) = job_man.start_threads(uring_count);
         Self {
@@ -259,9 +357,6 @@ impl Prefetcher {
     /// # Arguments
     /// * `task_id` - ID of the task to process
     pub fn run_task(&self, task_id: i64) {
-        //if (task_id >> 24) > 76 {
-        //    println!("HH run_task {:#016x}", task_id);
-        //}
         let height = split_task_id(task_id).0;
         if is_first_task_in_block(task_id) {
             let cache = self.task_hub.get_entry_cache(height);
@@ -269,7 +364,6 @@ impl Prefetcher {
             drop(old);
         }
         let change_sets = self.task_hub.get_change_sets(task_id).clone();
-        //println!("AA to_get_job task_id={:#016x}", task_id);
         let mut job = self.bck_receiver.recv().unwrap();
         job.need_send_to_updater = true;
         job.task_id = task_id;
@@ -283,9 +377,6 @@ impl Prefetcher {
             for change_set in change_sets.iter() {
                 change_set.for_each_op(|op, _, kh: &[u8; 32], _k, _v, _, _r| {
                     let shard_id = byte0_to_shard_id(kh[0]);
-                    //if shard_id==0 && task_id==TASK_ID  {
-                    //    println!("HH kh={:?}", &kh[..4]);
-                    //}
 
                     let pos_list = if op == OP_CREATE || op == OP_DELETE {
                         indexer.for_each_adjacent_value(height, &kh[..])
@@ -327,9 +418,6 @@ impl Prefetcher {
         let change_sets = self.task_hub.get_change_sets(task_id).clone();
         let need_job = change_sets.iter().any(|x| x.has_create_del());
         if !need_job {
-            // for shard_id in 0..SHARD_COUNT {
-            //     self.job_man.done_chans[shard_id].send(task_id).unwrap();
-            // }
             return;
         }
 
@@ -593,6 +681,7 @@ impl JobManager {
             sub_id_senders: Vec::with_capacity(0),
             uring_count,
             uring_size,
+            prune_receiver: None,
         }
     }
 
@@ -721,18 +810,38 @@ impl JobManager {
 
         self.sub_id_senders = Vec::with_capacity(uring_count);
         let mut sub_id_receivers: Vec<Receiver<Arc<Job>>> = Vec::with_capacity(uring_count);
+
+        // Each io_uring worker has its own fixed-file table, so a dispatcher thread copies
+        // every PruneCmd to one channel per worker.
+        let mut prune_txs = Vec::with_capacity(uring_count);
+        let mut prune_rxs = Vec::with_capacity(uring_count);
+
         for _ in 0..uring_count {
-            let (sub_id_sender, sub_id_receiver): (Sender<Arc<Job>>, Receiver<Arc<Job>>) =
-                unbounded();
-            self.sub_id_senders.push(sub_id_sender);
-            sub_id_receivers.push(sub_id_receiver);
+            let (sub_tx, sub_rx) = unbounded();
+            self.sub_id_senders.push(sub_tx);
+            sub_id_receivers.push(sub_rx);
+            let (ptx, prx) = unbounded::<PruneCmd>();
+            prune_txs.push(ptx);
+            prune_rxs.push(prx);
         }
+
+        let master_prune_rx = self.prune_receiver.as_ref().expect("Prune receiver not set").clone();
+        std::thread::spawn(move || {
+            while let Ok(cmd) = master_prune_rx.recv() {
+                for tx in &prune_txs {
+                    let _ = tx.send(cmd);
+                }
+            }
+        });
+
         let (job_man, bck_receiver, warmup_bck_receivers) = self.build_job_channel();
+        
         for _ in 0..uring_count {
             let sub_id_receiver = sub_id_receivers.pop().unwrap();
+            let prune_receiver = prune_rxs.pop().unwrap();
             let job_man = job_man.clone();
             std::thread::spawn(move || {
-                Self::uring_loop(job_man, sub_id_receiver);
+                Self::uring_loop(job_man, sub_id_receiver, prune_receiver);
             });
         }
         (job_man, bck_receiver, warmup_bck_receivers)
@@ -750,7 +859,6 @@ impl JobManager {
             let sj = job.get_sub_job(i);
             let need_read_ssd = self.add_sub_job(&job, sj);
             sj.need_read_ssd.store(need_read_ssd, SC);
-            //println!("AA SET id={:#016x} need={}", sj.sub_id, need_read_ssd);
         }
 
         // Pin the whole job onto a single io_uring worker to avoid cross-worker sharing.
@@ -763,7 +871,6 @@ impl JobManager {
                 let sj = job.get_sub_job(i);
                 (sj.need_read_ssd.load(SC), sj.sub_id)
             };
-            //println!("AA GET id={:#016x} need={}", sub_id, need_read_ssd);
             if need_read_ssd {
                 job.disk_sub_ids_mut().push(sub_id);
             }
@@ -859,7 +966,11 @@ impl JobManager {
     /// # Arguments
     /// * `job_man` - Reference to the job manager
     /// * `sub_id_receiver` - Receiver for sub-job IDs
-    fn uring_loop(job_man: Arc<Self>, sub_id_receiver: Receiver<Arc<Job>>) {
+    fn uring_loop(
+        job_man: Arc<Self>,
+        sub_id_receiver: Receiver<Arc<Job>>,
+        prune_receiver: Receiver<PruneCmd>
+    ) {
         let mut buf_list = BufList::new(job_man.uring_size);
         // For each in-flight buffer id, remember which (job_slot, sub_id) it belongs to.
         // job_slot is an index into `job_slots`.
@@ -867,11 +978,9 @@ impl JobManager {
             .take(job_man.uring_size as usize)
             .collect();
         let mut ring = IoUring::<squeue::Entry, cqueue::Entry>::builder()
-            //.setup_sqpoll(5000)
             .setup_single_issuer()
             .build(job_man.uring_size)
             .unwrap();
-        //new(URING_SIZE).unwrap();
         // keep files being read in hashmap to prevent it from being dropped
 
         // Register fixed buffers, use ReadFixed to avoid per-I/O page pin overhead
@@ -931,19 +1040,37 @@ impl JobManager {
             slot_idx
         }
 
-        // Receive one batch (blocking or non-blocking) and enqueue its sub-ids.
+        // Receive one batch (blocking or non-blocking) and enqueue its sub-ids. While
+        // blocked, a prune notification also wakes the worker; it is queued in `prunes`
+        // and applied once the submission queue is released.
+        #[allow(clippy::too_many_arguments)]
         fn recv_one_job(
             blocking: bool,
             sub_id_receiver: &Receiver<Arc<Job>>,
+            prune_receiver: &Receiver<PruneCmd>,
+            prunes: &mut Vec<PruneCmd>,
             pending: &mut VecDeque<(usize, u32)>,
             job_slots: &mut Vec<Option<JobSlot>>,
             free_slots: &mut Vec<usize>,
             job_ptr_to_slot: &mut HashMap<usize, usize>,
         ) -> Option<()> {
             let job = if blocking {
-                match sub_id_receiver.recv() {
-                    Ok(b) => b,
-                    Err(_) => return None,
+                crossbeam::channel::select! {
+                    recv(sub_id_receiver) -> msg => match msg {
+                        Ok(b) => b,
+                        Err(_) => return None,
+                    },
+                    recv(prune_receiver) -> cmd => match cmd {
+                        Ok(cmd) => {
+                            prunes.push(cmd);
+                            return Some(());
+                        }
+                        // No more prune notifications: wait for jobs only.
+                        Err(_) => match sub_id_receiver.recv() {
+                            Ok(b) => b,
+                            Err(_) => return None,
+                        },
+                    },
                 }
             } else {
                 match sub_id_receiver.try_recv() {
@@ -976,7 +1103,16 @@ impl JobManager {
             Some(())
         }
 
+        // Prune notifications not yet applied (received while blocked on the job channel,
+        // or deferred while SQEs were still queued).
+        let mut prunes: Vec<PruneCmd> = Vec::new();
+
         loop {
+            while let Ok(cmd) = prune_receiver.try_recv() {
+                prunes.push(cmd);
+            }
+            registered_files.apply_prunes(&mut ring, &mut prunes);
+
             let mut sq = ring.submission();
             // If we pushed any SQEs in this iteration, prefer waiting for a minimal number of CQEs
             // to keep the pipeline saturated and avoid waiting for too many completions when
@@ -989,6 +1125,8 @@ impl JobManager {
                         recv_one_job(
                             true,
                             &sub_id_receiver,
+                            &prune_receiver,
+                            &mut prunes,
                             &mut pending,
                             &mut job_slots,
                             &mut free_slots,
@@ -998,6 +1136,8 @@ impl JobManager {
                         recv_one_job(
                             false,
                             &sub_id_receiver,
+                            &prune_receiver,
+                            &mut prunes,
                             &mut pending,
                             &mut job_slots,
                             &mut free_slots,
@@ -1025,8 +1165,7 @@ impl JobManager {
                 let entry_file = &job_man.entry_files[sj.shard_id as usize];
                 let logical_off = sj.file_pos % qmdb_common::def::HPFILE_RANGE;
                 let seg_id = logical_off / entry_file.segment_size();
-                let key: u64 =
-                    ((sj.shard_id as u64) << 56) | ((seg_id as u64) & ((1u64 << 56) - 1));
+                let key = seg_key(sj.shard_id as usize, seg_id as u64);
 
                 // Look up registered key, or mark as pending registration
                 let fixed_slot = registered_files.lookup_or_mark_pending(key, raw_fd);
@@ -1035,11 +1174,13 @@ impl JobManager {
                 let read_e = Self::build_read_entry(raw_fd, fixed_slot, offset, buf, id);
                 sub_id_vec[id as usize] = (sj.sub_id, job_slot);
                 unsafe { sq.push(&read_e).unwrap() };
+                DIO_READ_COUNT.fetch_add(1, Ordering::Relaxed);
                 pushed_any = true;
                 in_flight += 1;
             }
             drop(sq);
 
+            registered_files.apply_prunes(&mut ring, &mut prunes);
             // Process pending fd registrations (after submission queue is released)
             registered_files.flush_pending(&ring);
 
@@ -1050,16 +1191,19 @@ impl JobManager {
                 // - If there's pending work and free buffers, wait for fewer completions
                 //   to keep the submission queue saturated and maintain pipeline throughput.
                 let buf_free = buf_list.has_free_buf();
-                let wait_nr = if pending.is_empty() || !buf_free {
-                    // No more work can be submitted right now (either no pending work, or buffers exhausted).
-                    // Batch-wait to amortize syscall overhead.
+
+                let wait_nr = if !pending.is_empty() && !buf_free {
+                    1 
+                } else if pending.is_empty() {
+                    // No new work: wait for a batch of completions to save system calls
                     (in_flight / 2).clamp(MIN_WAIT, MAX_WAIT)
                 } else if pushed_any {
-                    // We just pushed SQEs and can continue submitting; keep latency low to sustain pipeline.
+                    // Just submitted new work: wake up soon to check
                     MIN_WAIT
                 } else {
                     MIN_WAIT
                 };
+
                 ring.submit_and_wait(wait_nr).unwrap();
             }
             for cqe in ring.completion() {
@@ -1076,7 +1220,6 @@ impl JobManager {
                 if n <= 0 {
                     panic!("AA uring read error");
                 }
-                //println!("AA done sub_id {:#016x}", sub_id);
                 // Finish using a shared reference; no Arc clone needed per completion.
                 {
                     let slot = job_slots[job_slot].as_ref().expect("job slot must exist");
@@ -1159,8 +1302,6 @@ impl JobManager {
         }
         job.get_entry_cache()
             .insert(sj.shard_id as usize, sj.file_pos, &e);
-        // the last finished sub_job send task_id to done_chan
-        // self.handle_sub_job_completed(&job, sj.shard_id as usize);
     }
 }
 
@@ -1194,7 +1335,6 @@ impl SubJob {
     /// # Returns
     /// A new SubJob instance
     fn new(sub_id: u32, shard_id: usize, file_pos: i64) -> Self {
-        //buf.fill(0);
         SubJob {
             sub_id,
             shard_id: shard_id as u8,
@@ -1214,7 +1354,6 @@ impl SubJob {
         self.shard_id = shard_id as u8;
         self.file_pos = file_pos;
         self.need_read_ssd.store(false, SC);
-        //self.buf.fill(0);
     }
 
     /// Calculates the io_uring instance ID for a given position.
@@ -1341,110 +1480,3 @@ impl BufList {
     }
 }
 
-/*
-#[test]
-fn test_run_task() {
-    let temp_dir = tempfile::Builder::new()
-        .prefix("prefetcher_ut_cache_hit")
-        .tempdir()
-        .unwrap();
-    #[cfg(not(feature = "tee_cipher"))]
-    let cipher = None;
-    #[cfg(feature = "tee_cipher")]
-    let cipher = {
-        let key = Key::<Aes256Gcm>::from_slice(&[0; 32]);
-        let cipher = Aes256Gcm::new(&key);
-        Some(cipher)
-    };
-
-    let entry_file = Arc::new(EntryFile::new(
-        8 * 1024,
-        128 * 1024,
-        temp_dir.path().to_str().unwrap().to_string(),
-        cipher,
-    ));
-    let (mut entry_buffer_writer, _reader) = entrybuffer::new(0, 1024);
-    let entry_cache = Arc::new(EntryCache::new());
-    let indexer_arc = Arc::new(Indexer::new(1024));
-    let task_hub = Arc::new(BlockPairTaskHub::<SimpleTask>::new());
-    let pool = ThreadPool::new(1);
-
-    let mut cs1 = ChangeSet::new();
-    let key = "key".as_bytes();
-    let kh = qmdb_common::entryfile::entry::entry_key_hash(key);
-    let shard_id = byte0_to_shard_id(kh[0]) as u8;
-    cs1.add_op(
-        def::OP_DELETE,
-        shard_id,
-        &kh,
-        key.as_ref(),
-        &[1, 2, 3],
-        Option::None,
-    );
-    cs1.sort();
-    let task0 = SimpleTask::new(vec![ChangeSet::new()]);
-    let task1 = SimpleTask::new(vec![cs1]);
-    let tasks = vec![
-        RwLock::new(Option::Some(task0)),
-        RwLock::new(Option::Some(task1)),
-    ];
-
-    let entry = Entry {
-        key: key,
-        value: "val".as_bytes(),
-        next_key_hash: &[0xab; 32],
-        version: 12345,
-        serial_number: 99999,
-    };
-    let pos = entry_buffer_writer.append(&entry, &[]);
-    indexer_arc.add_kv(&kh[..10], pos, 0);
-
-    for _i in 0..2000 {
-        let _ = entry_buffer_writer.append(&entry, &[]);
-    }
-
-    task_hub.start_block(
-        0x123,
-        Arc::new(TasksManager::new(tasks, 0)),
-        entry_cache.clone(),
-    );
-
-    let mut job_man = JobManager::new(0, 0, 0);
-    let mut done_receivers = Vec::with_capacity(SHARD_COUNT);
-    for _ in 0..SHARD_COUNT {
-        let (done_sender, done_receiver) = bounded(1);
-        job_man.add_shard(
-            entry_buffer_writer.entry_buffer.clone(),
-            entry_file.clone(),
-            done_sender,
-        );
-        done_receivers.push(done_receiver);
-    }
-
-    let prefetcher = Prefetcher::new(
-        task_hub,
-        entry_cache.clone(),
-        indexer_arc,
-        Arc::new(pool),
-        job_man,
-    );
-
-    prefetcher.run_task(0, 0x123000001);
-
-    std::thread::sleep(std::time::Duration::from_secs(1));
-    assert!(done_receivers[0].try_recv().is_ok());
-    assert!(done_receivers[0].try_recv().is_err());
-    assert!(done_receivers[shard_id as usize].try_recv().is_ok());
-    assert!(done_receivers[shard_id as usize].try_recv().is_err());
-
-    let mut filled_size = 0;
-    entry_cache.lookup(shard_id as usize, 0, |entry_bz| {
-        filled_size = entry_bz.bz.len();
-        assert_eq!(entry_bz.value(), "val".as_bytes());
-    });
-
-    #[cfg(not(feature = "tee_cipher"))]
-    assert_eq!(64, filled_size);
-    #[cfg(feature = "tee_cipher")]
-    assert_eq!(80, filled_size);
-}*/

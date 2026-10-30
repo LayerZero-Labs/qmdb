@@ -142,6 +142,9 @@ impl Prefetcher {
         indexer: Arc<Indexer>,
         tpool: Arc<ThreadPool>,
         job_man: JobManager,
+        // Accepted for API parity with dioprefetcher::Prefetcher::new; ignored
+        // because uniprefetcher does not use io_uring and needs no prune signals.
+        _prune_receiver: crossbeam::channel::Receiver<crate::prefetcher::dioprefetcher::PruneCmd>,
     ) -> Self {
         Self {
             task_hub,

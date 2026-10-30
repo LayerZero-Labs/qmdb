@@ -149,7 +149,6 @@ impl Tree {
     /// This function reads all entries from the specified position and:
     /// 1. Recovers each entry's state
     /// 2. Updates twig structures
-    /// 3. Maintains progress tracking
     ///
     /// # Arguments
     /// * `oldest_active_twig_id` - ID of the oldest twig that hasn't been pruned
@@ -173,24 +172,9 @@ impl Tree {
                 bz: &buf[..read_len],
             };
         }
-        let total = size - pos;
-        let _step = total / 200;
-        let _start_pos = pos;
-        let mut _last_pos = pos;
 
-        let mut _count = 0;
         let mut got_first_entry = false;
         while pos < size {
-            // if (pos - start_pos) / step != (last_pos - start_pos) / step {
-            //     println!(
-            //         "ScanEntries{} {:.3} {}/{}",
-            //         self.my_shard_id,
-            //         (pos - start_pos) as f64 / total as f64,
-            //         pos - start_pos,
-            //         total
-            //     );
-            // }
-            _last_pos = pos;
             let read_len = entry_file.read_entry(pos, size, &mut buf).unwrap();
             let entry = EntryBz {
                 bz: &buf[..read_len],
@@ -206,7 +190,6 @@ impl Tree {
             self.recover_entry(entry, oldest_active_twig_id, youngest_twig_id);
             pos += buf.len() as i64;
             buf.clear();
-            _count += 1;
         }
     }
 

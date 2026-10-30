@@ -87,7 +87,7 @@ use qmdb_common::def::{COMPACT_THRES, UTILIZATION_DIV, UTILIZATION_RATIO};
 /// The prefetcher improves read performance by asynchronously loading
 /// data that may be needed soon. More threads can improve throughput
 /// but consume more CPU resources.
-const PREFETCHER_THREAD_COUNT: usize = 8; //512;
+const PREFETCHER_THREAD_COUNT: usize = 8;
 
 /// Default size of io_uring queues for Linux systems.
 ///
@@ -302,3 +302,4 @@ impl Config {
         self.with_twig_file = with_twig_file;
     }
 }
+

@@ -16,7 +16,6 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
 use super::hover_gen::HoverGen;
-use super::shuffle_param::ShuffleParam;
 use super::test_gen::TestGenV2;
 
 /// Type of block being generated

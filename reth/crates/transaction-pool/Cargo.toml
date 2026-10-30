@@ -1,0 +1,93 @@
+[package]
+name = "reth-transaction-pool"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Transaction pool implementation"
+
+[lints]
+workspace = true
+
+[dependencies]
+# reth
+reth-chain-state.workspace = true
+reth-chainspec.workspace = true
+reth-eth-wire-types.workspace = true
+reth-primitives = { workspace = true, features = ["c-kzg", "secp256k1"] }
+reth-execution-types.workspace = true
+reth-fs-util.workspace = true
+reth-storage-api.workspace = true
+reth-tasks.workspace = true
+revm.workspace = true
+
+# ethereum
+alloy-eips.workspace = true
+alloy-primitives.workspace = true
+alloy-rlp.workspace = true
+
+# async/futures
+futures-util.workspace = true
+parking_lot.workspace = true
+tokio = { workspace = true, default-features = false, features = ["sync"] }
+tokio-stream.workspace = true
+
+# metrics
+reth-metrics.workspace = true
+metrics.workspace = true
+
+# misc
+aquamarine.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+rustc-hash.workspace = true
+schnellru.workspace = true
+serde = { workspace = true, features = ["derive", "rc"], optional = true }
+bitflags.workspace = true
+auto_impl.workspace = true
+smallvec.workspace = true
+
+# testing
+rand = { workspace = true, optional = true }
+paste = { workspace = true, optional = true }
+proptest = { workspace = true, optional = true }
+proptest-arbitrary-interop = { workspace = true, optional = true }
+alloy-consensus = { workspace = true, optional = true }
+
+[dev-dependencies]
+reth-primitives = { workspace = true, features = ["arbitrary"] }
+reth-provider = { workspace = true, features = ["test-utils"] }
+reth-tracing.workspace = true
+paste.workspace = true
+rand.workspace = true
+proptest.workspace = true
+proptest-arbitrary-interop.workspace = true
+criterion.workspace = true
+pprof = { workspace = true, features = ["criterion", "flamegraph"] }
+assert_matches.workspace = true
+tempfile.workspace = true
+serde_json.workspace = true
+alloy-consensus.workspace = true
+
+[features]
+default = ["serde"]
+serde = ["dep:serde"]
+test-utils = ["rand", "paste", "serde", "alloy-consensus"]
+arbitrary = ["proptest", "reth-primitives/arbitrary", "proptest-arbitrary-interop"]
+
+[[bench]]
+name = "truncate"
+required-features = ["test-utils", "arbitrary"]
+harness = false
+
+[[bench]]
+name = "reorder"
+required-features = ["test-utils", "arbitrary"]
+harness = false
+
+[[bench]]
+name = "priority"
+required-features = ["arbitrary"]
+harness = false

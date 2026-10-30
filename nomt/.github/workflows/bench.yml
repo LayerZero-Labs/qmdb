@@ -1,0 +1,93 @@
+name: Benchtop
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  bench:
+    name: NOMT - run benchtop
+    runs-on: ubuntu-latest
+    env:
+      SIZE: 22
+      BUCKETS: 4000000
+      RUST_BACKTRACE: 1
+    steps:
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+      - uses: actions/checkout@v5
+      - run: |
+          # Install required dependencies
+          sudo apt-get update
+          sudo apt-get install -y libclang-dev
+      - run: df -h /
+      - run: |
+          # First build the binary
+          cargo build --release --verbose --manifest-path=benchtop/Cargo.toml
+          
+          # Verify binary exists before proceeding
+          if [ ! -f "benchtop/target/release/benchtop" ]; then
+            echo "Binary not found at benchtop/target/release/benchtop"
+            exit 1
+          fi
+          
+          # Create directories first to avoid potential issues
+          mkdir -p /tmp
+          
+          # Save our binary
+          cp benchtop/target/release/benchtop /tmp/benchtop
+          
+          # Verify copy succeeded
+          if [ ! -f "/tmp/benchtop" ]; then
+            echo "Failed to copy binary to /tmp"
+            exit 1
+          fi
+          
+          # Now safe to clean up
+          cargo clean
+          rm -rf ~/.cargo/registry
+          rm -rf ~/.cargo/git
+          rm -rf ~/.rustup
+          
+          # Create target directory after cleanup
+          mkdir -p target/release
+          
+          # Move binary to final location
+          mv /tmp/benchtop target/release/benchtop
+          
+          # Final verification
+          if [ ! -f "target/release/benchtop" ] || [ ! -x "target/release/benchtop" ]; then
+            echo "Final binary is missing or not executable"
+            exit 1
+          fi
+          
+          # Make absolutely sure it's executable
+          chmod +x target/release/benchtop
+          
+      - run: >-
+          ./target/release/benchtop init
+          -b nomt
+          -c $SIZE
+          -w transfer
+          --buckets $BUCKETS
+      - run: >-
+          ./target/release/benchtop run
+          -w transfer
+          -b nomt
+          -s 10000
+          -c $SIZE
+          --time-limit 30s
+          --workload-concurrency 6

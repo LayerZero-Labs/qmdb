@@ -401,7 +401,6 @@ mod twig_file_test {
     use super::*;
 
     fn generate_twig(mut rand_num: u32, twig: &mut TwigMT) {
-        // let mut rand_num = rand_num;
         for item in twig.iter_mut().take(4096).skip(2048) {
             let mut j = 0;
             while j + 4 < 32 {

@@ -212,9 +212,6 @@ impl HybridIndexer {
     }
 
     fn _for_each_value(&self, height: i64, warmup: bool, k80: &[u8]) -> PosList {
-        //if k80[0]==0x81 && k80[1]==0x8b || k80[2]==0xa1 && k80[3]==0x9a || k80[0]==0x4c && k80[1]==0xe2 {
-        //    println!("FEV k80={}", hex::encode(k80));
-        //}
         let (idx, k) = split_k80(k80);
         let mut unit = self.units[idx].lock();
         let mut pos_list = PosList::default();
@@ -226,9 +223,6 @@ impl HybridIndexer {
     }
 
     fn _for_each_adjacent_value(&self, height: i64, warmup: bool, k80: &[u8]) -> PosList {
-        //if k80[0]==0x81 && k80[1]==0x8b || k80[2]==0xa1 && k80[3]==0x9a || k80[0]==0x4c && k80[1]==0xe2 {
-        //    println!("FEA k80={}", hex::encode(k80));
-        //}
         let (idx, k) = split_k80(k80);
         let mut unit = self.units[idx].lock();
         let mut buf = [0u8; 10];
@@ -250,9 +244,6 @@ impl IndexerTrait for HybridIndexer {
 
     fn add_kv(&self, k80: &[u8], v_in: i64, sn: u64) {
         let (idx, k) = split_k80(k80);
-        //if k80[0]==0x81 && k80[1]==0x8b || k80[2]==0xa1 && k80[3]==0x9a || k80[0]==0x4c && k80[1]==0xe2 {
-        //    println!("ADD_KV k80={} v_in={:#010x} sn={:#010x}", hex::encode(k80), v_in, sn);
-        //}
         let mut unit = self.units[idx].lock();
         assert!(v_in % 8 == 0);
 
@@ -261,9 +252,6 @@ impl IndexerTrait for HybridIndexer {
         if cfg!(feature = "check_hybridindexer") {
             unit.ref_u.as_mut().unwrap().add_kv(0, k, v_in);
         }
-        //if k80[0]==0x81 && k80[1]==0x8b || k80[2]==0xa1 && k80[3]==0x9a || k80[0]==0x4c && k80[1]==0xe2 {
-        //    println!("overlay.add_kv k={:#016x}, v_in={:#010x} len={}", k, v_in, unit.overlay.new_kv.len());
-        //}
         let shard_id = idx / SHARD_DIV;
         self.activebits[shard_id].set(sn);
         self.sizes[shard_id].fetch_add(1, Ordering::Relaxed);
@@ -272,9 +260,6 @@ impl IndexerTrait for HybridIndexer {
 
     fn erase_kv(&self, k80: &[u8], v_in: i64, sn: u64) {
         let (idx, k) = split_k80(k80);
-        //if k80[0]==0x81 && k80[1]==0x8b || k80[2]==0xa1 && k80[3]==0x9a || k80[0]==0x4c && k80[1]==0xe2 {
-        //    println!("ERASE_KV k80={} v_in={:#010x} sn={:#010x}", hex::encode(k80), v_in, sn);
-        //}
         assert!(!self.initializing.load(Ordering::Acquire));
 
         let mut unit = self.units[idx].lock();
@@ -285,9 +270,6 @@ impl IndexerTrait for HybridIndexer {
         if cfg!(feature = "check_hybridindexer") {
             unit.ref_u.as_mut().unwrap().erase_kv(0, k, v_in);
         }
-        //if k80[0]==0x81 && k80[1]==0x8b || k80[2]==0xa1 && k80[3]==0x9a || k80[0]==0x4c && k80[1]==0xe2 {
-        //    println!("overlay.erase_kv k={:#016x}, v_in={:#010x} len={}", k, v_in, unit.overlay.new_kv.len());
-        //}
         let shard_id = idx / SHARD_DIV;
         self.activebits[shard_id].clear(sn);
         self.sizes[shard_id].fetch_sub(1, Ordering::Relaxed);
@@ -296,9 +278,6 @@ impl IndexerTrait for HybridIndexer {
 
     fn change_kv(&self, k80: &[u8], v_old: i64, v_new: i64, sn_old: u64, sn_new: u64) {
         let (idx, k) = split_k80(k80);
-        //if k80[0]==0x81 && k80[1]==0x8b || k80[2]==0xa1 && k80[3]==0x9a || k80[0]==0x4c && k80[1]==0xe2 {
-        //    println!("CHANGE_KV k80={} v:{:#010x}->{:#010x} sn:{:#010x}->{:#010x}", hex::encode(k80), v_old, v_new, sn_old, sn_new);
-        //}
         assert!(!self.initializing.load(Ordering::Acquire));
 
         let mut unit = self.units[idx].lock();
@@ -312,9 +291,6 @@ impl IndexerTrait for HybridIndexer {
         if cfg!(feature = "check_hybridindexer") {
             unit.ref_u.as_mut().unwrap().change_kv(0, k, v_old, v_new);
         }
-        //if k80[0]==0x81 && k80[1]==0x8b || k80[2]==0xa1 && k80[3]==0x9a || k80[0]==0x4c && k80[1]==0xe2 {
-        //    println!("overlay.change_kv k={:#016x}, v={:#010x}->{:#010x} len={}", k, v_old, v_new, unit.overlay.new_kv.len());
-        //}
         let shard_id = idx / SHARD_DIV;
         self.activebits[shard_id].clear(sn_old);
         self.activebits[shard_id].set(sn_new);
@@ -387,7 +363,6 @@ mod tests {
 
     impl HybridIndexer {
         pub fn init(&mut self) {
-            // let sn = 0i64;
             let mut ones80 = [0xFFu8; 10];
             let mut zero80 = [0u8; 10];
             for shard_id in 0..SHARD_COUNT {

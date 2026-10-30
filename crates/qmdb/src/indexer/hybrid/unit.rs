@@ -53,27 +53,14 @@ impl Unit {
             self.end_pos,
             &self.overlay,
         );
-        //if idx==0x44d1 || idx==0x0193 || idx==0x00ab || idx==0x004b {
-        //    let guard = self.ifof.read();
-        //    println!("NOTE idx={:#08x} load_file {} start={} end={}", idx, guard.get_name(), self.start_pos, self.end_pos);
-        //}
         self.start_pos = f_wr.get_file_size();
-        //if idx==0x44d1 || idx==0x0193 || idx==0x00ab || idx==0x004b {
-        //    println!("NOTE idx={:#08x} write_file {} start={}", idx, f_wr.get_name(), self.start_pos);
-        //}
         for &(k, pos) in self.overlay.new_kv.iter() {
             let key_pos = to_key_pos(k, pos);
-            //if idx==0x44d1 || k==0x6983c9d87fe60000 {
-            //    println!("HERE idx={:#08x} k={:#016x} ov:{}", idx, k, hex::encode(&key_pos));
-            //}
             // get all the records less than key_pos
             loop {
                 if let Some(a) = f_rd.cur_record() {
                     let (k_rd, pos_rd) = get_key_pos(&a[..]);
                     if (k_rd, pos_rd) < (k, pos) {
-                        //if idx==0x44d1 || k_rd==0x6983c9d87fe60000 {
-                        //    println!("HERE-rd idx={:#08x} {}", idx, hex::encode(&a));
-                        //}
                         f_wr.write(a, &mut self.first_k_list);
                         f_rd.next(&self.overlay);
                         continue;
@@ -81,18 +68,11 @@ impl Unit {
                 }
                 break;
             }
-            //if idx==0x44d1 || k==0x6983c9d87fe60000 {
-            //    println!("HERE-ov idx={:#08x} {}", idx, hex::encode(&key_pos));
-            //}
             f_wr.write(&key_pos, &mut self.first_k_list);
         }
         // flush the remaining records in f_rd
         loop {
             if let Some(a) = f_rd.cur_record() {
-                //let (k_rd, pos_rd) = get_key_pos(&a[..]);
-                //if idx==0x44d1 || k_rd==0x6983c9d87fe60000 {
-                //    println!("HERE-rd idx={:#08x} {} k_rd={:#016x} pos_rd={:#016x}", idx, hex::encode(&a), k_rd, pos_rd);
-                //}
                 f_wr.write(a, &mut self.first_k_list);
                 f_rd.next(&self.overlay);
                 continue;
@@ -101,9 +81,6 @@ impl Unit {
         }
         f_wr.flush();
         self.end_pos = f_wr.get_file_size();
-        //if idx==0x44d1 || idx==0x0193 || idx==0x00ab || idx==0x004b {
-        //    println!("NOTE idx={:#08x} write_file {} end={}", idx, f_wr.get_name(), self.end_pos);
-        //}
         self.overlay.clear();
         self.cache_map.clear();
         self.ifof = f_wr.get_tmp_file();
@@ -126,17 +103,6 @@ impl Unit {
         } else {
             None
         };
-        //if rv.is_some() {
-        //    let rset = rv.as_ref().unwrap();
-        //    //println!("RSET BEGIN");
-        //    for v in rset.iter() {
-        //        //println!("RSET k64={} v={:#016x}", hex::encode(k64arr), v);
-        //        //if access(*v) {
-        //        //    break;
-        //        //}
-        //    }
-        //    //println!("RSET END");
-        //}
         let mut list = match self.cache_map.lookup_without_prev(height, warmup, k) {
             Some(l) => l, //cache hit
             None => self.get_from_file(height, k, false).1,
@@ -145,7 +111,6 @@ impl Unit {
         self.overlay.collect_values(k, &mut list);
         let mut stop_accessing = false;
         for (_, v) in list.enumerate() {
-            //println!("NOW k={:#016x} v={:#016x}", k, v);
             if self.overlay.is_erased_value(v) {
                 continue;
             }
@@ -202,9 +167,6 @@ impl Unit {
                 // bit#49 == 1 means prev key's value
                 BigEndian::write_u64(&mut k80[2..], prev_k);
             }
-            //if k80[0]==0x63 && k80[1]==0xd4 {
-            //    println!("ACCESS k={:#016x} prev_k={:#016x} k80={} v={:#016x}", k, prev_k, hex::encode(&k80), v);
-            //}
             let only_bit49_zero = !(1i64 << 48);
             let v = v & only_bit49_zero; //clear bit#49
             if self.overlay.is_erased_value(v) {
@@ -267,20 +229,7 @@ impl Unit {
                 prev_all_erased = false;
             }
         }
-        //if k80[0]==0x63 && k80[1]==0xd4 {
-        //    println!("OVL k={:#016x}", k);
-        //}
-        //let old_prev = prev;
-        //let mut _new_prev = u64::MAX;
-        //let list0 = list.clone();
         if let Some((new_prev, mut new_list)) = self.overlay.get_prev_values(k) {
-            //_new_prev = new_prev;
-            //if k==0x163f6beca3200000 {
-            //    println!("OVL new-prev={:#016x}", new_prev);
-            //    for (_, v) in new_list.enumerate() {
-            //        println!("OVL v={:#016x}", v);
-            //    }
-            //}
             if prev <= new_prev || prev_all_erased {
                 // new_prev is closer to k, so we use 'new_list' to replace 'list'
                 for (_, pos) in list.enumerate() {
@@ -298,10 +247,8 @@ impl Unit {
                 // new_prev is farther from k, so we ignore it
             }
         }
-        //let list1 = list.clone();
         // add current bucket in overlay.new_kv to list
         self.overlay.collect_values(k, &mut list);
-        //let list2 = list.clone();
         let mut buf = *k80;
         let _ = self.access_list(
             &list,
@@ -311,18 +258,6 @@ impl Unit {
             |k, pos| access(k, pos),
             &mut rv,
         );
-        //if not_in {
-        //    println!("NOT_IN old_prev={:#016x} new_prev={:#016x}", old_prev, _new_prev);
-        //    for (_, v) in list0.enumerate() {
-        //        println!("0: v={:#016x}", v);
-        //    }
-        //    for (_, v) in list1.enumerate() {
-        //        println!("1: v={:#016x}", v);
-        //    }
-        //    for (_, v) in list2.enumerate() {
-        //        println!("2: v={:#016x}", v);
-        //    }
-        //}
 
         if let Some(rset) = rv {
             if !rset.is_empty() {

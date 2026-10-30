@@ -73,7 +73,6 @@ struct CrudCli {
 }
 
 fn main() {
-    //env_logger::init();
     let args = CrudCli::parse();
 
     info!("CRUD benchmark config: {:?}", args);

@@ -66,11 +66,10 @@ impl HoverGen {
     fn fill_kv(&self, num: u64, k: &mut [u8], v: &mut [u8]) -> [u8; 32] {
         BigEndian::write_u64(&mut k[12..20], num);
         let hash = qmdb_common::entryfile::entry::entry_key_hash(&k[12..20]);
-        k[20..20 + 32].copy_from_slice(&hash[..]);
         for i in 0..12 {
-            k[i] = k[20 + i] ^ k[32 + i];
+            k[i] = hash[i] ^ hash[12 + i];
         }
-        let kh = qmdb_common::entryfile::entry::entry_key_hash(&k[..]);
+        let kh = qmdb_common::entryfile::entry::entry_key_hash(&k[..20]);
         BigEndian::write_u32(&mut v[..4], self.cur_round as u32);
         v[4..].copy_from_slice(&kh[4..]);
         kh
@@ -206,7 +205,7 @@ impl HoverGen {
         track_keys: bool,
     ) -> (ChangeSet, u64, Vec<u64>) {
         let mut cset = ChangeSet::new();
-        let mut k = [0u8; 32 + 20];
+        let mut k = [0u8; 20];
         let mut v = [0u8; 32];
         let mut keys = if track_keys {
             Vec::with_capacity(HOVER_OPS_PER_CSET)
@@ -247,7 +246,7 @@ impl HoverGen {
         track_keys: bool,
     ) -> (ChangeSet, Vec<u64>) {
         let mut cset = ChangeSet::new();
-        let mut k = [0u8; 32 + 20];
+        let mut k = [0u8; 20];
         let mut v = [0u8; 32];
         let mut keys = if track_keys {
             Vec::with_capacity(HOVER_OPS_PER_CSET)

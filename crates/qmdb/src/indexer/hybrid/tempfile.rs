@@ -6,8 +6,6 @@ use std::fs::File;
 #[cfg(unix)]
 use std::os::unix::fs::FileExt;
 
-// #![allow(dead_code)]
-
 pub struct TempFile {
     file: File,
     fname: String,

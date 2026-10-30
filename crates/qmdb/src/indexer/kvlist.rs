@@ -252,10 +252,7 @@ impl<const N: usize, const N_PLUS1: usize, const VL: usize> KVList<N, N_PLUS1, V
     // Append a new element and updates 'offsets_idx'
     // When 'offsets_idx' changes, fill a offset of 'elements' into 'offsets'
     pub fn append(&mut self, offsets_idx: &mut usize, elem: &[u8; N_PLUS1]) {
-        //println!("BeforeAppend");
-        //self.print();
         let new_idx = self.get_idx(elem);
-        //println!("II new_idx={} offsets_idx={}", new_idx, *offsets_idx);
         if *offsets_idx != new_idx {
             self.offsets[new_idx] = self.elements.len() as u32;
             *offsets_idx = new_idx;
@@ -263,16 +260,12 @@ impl<const N: usize, const N_PLUS1: usize, const VL: usize> KVList<N, N_PLUS1, V
         let mut bz = [0u8; N];
         bz[..].copy_from_slice(&elem[1..]);
         self.elements.push(bz);
-        //println!("AfterAppend");
-        //self.print();
     }
 
     pub fn find(&self, key: &[u8; N_PLUS1]) -> KVCursor {
         let start_idx = self.get_idx(key);
 
-        //println!("HH start_idx={}", start_idx);
         let mut range = self.get_range_from(start_idx);
-        //println!("HH range={:?}", range);
         if !range.valid {
             return KVCursor::new(usize::MAX, range);
         }
@@ -297,17 +290,14 @@ impl<const N: usize, const N_PLUS1: usize, const VL: usize> KVList<N, N_PLUS1, V
                 .err()
                 .unwrap(); // can only get Err(i) because no Equal here
         }
-        //println!("HH0 idx={idx}");
         // Refine using only the key prefix (values are not considered in ordering).
         while idx < range.end && self.elements[idx][..N - VL] < k[..N - VL] {
             idx += 1;
         }
-        //println!("HH1 idx={idx}");
         if idx == range.end {
             self.move_range_forward(&mut range);
             idx = if range.valid { range.start } else { usize::MAX };
         }
-        //println!("HH2 idx={idx}");
         KVCursor { idx, range }
     }
 }
