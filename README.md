@@ -7,6 +7,13 @@ This repository is the artifact of the PVLDB paper *QMDB: Breaking the DRAM Barr
 Structures* (Sijie Cui, Ziyue Qiu, Isaac Zhang, Ryan Zarick, Daniel Wong, Thomas Kim, Mignon Li, Kelvin Wong,
 George Amvrosiadis; Carnegie Mellon University and LayerZero Labs).
 
+> [!WARNING]
+> **This repository exists only to reproduce the paper's results. It is not for production use.**
+> To keep the measurements reproducible, the code and its dependencies, including the vendored baselines, are pinned
+> to the exact versions used in the evaluation. Some of these versions have known critical vulnerabilities. We keep
+> them on purpose and will not update or patch them here, because changing them would change what the paper
+> measured. Security findings against these pinned versions will not be addressed in this repository.
+
 It contains:
 - **`speed`**, a benchmark driver that runs QMDB and the three baselines (NOMT, LVMT, Reth) through one shared
   workload generator, so all systems see the same operations; it also replays the Ethereum mainnet trace (`bench/`),
