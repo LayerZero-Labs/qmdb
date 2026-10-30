@@ -22,9 +22,7 @@
 
 use core::marker::PhantomData;
 
-// ============================================================================
 // ShortKeyHasher trait for zero-cost SimpleMap hashing
-// ============================================================================
 
 /// Trait for computing short keys from key types.
 /// Used by SimpleMap for zero-cost hash computation (no function pointer overhead).
@@ -97,10 +95,6 @@ impl ShortKeyHasher<u64> for IdentityHasher {
     }
 }
 
-// ============================================================================
-// wyhash64
-// ============================================================================
-
 /// Fast hash mixing using wyhash64 algorithm.
 #[inline(always)]
 pub fn wyhash64(mut x: u64) -> u64 {
@@ -111,9 +105,7 @@ pub fn wyhash64(mut x: u64) -> u64 {
     x
 }
 
-// ============================================================================
 // Byte-slice short_key_fn (ShortKeyFn = fn(&[u8]) -> u64)
-// ============================================================================
 
 /// Extracts short key from 20-byte address keys.
 /// Uses all 20 bytes: bytes 0..8 XOR 8..16 XOR (12..20 shifted) + wyhash64.
@@ -172,9 +164,7 @@ pub fn hash32_short_key(key: &[u8]) -> u64 {
     head ^ tail
 }
 
-// ============================================================================
 // Typed key short_key_fn
-// ============================================================================
 
 /// Extracts short key from pointer-as-usize keys.
 /// Uses wyhash64 to avoid hash collision from predictable allocation patterns.

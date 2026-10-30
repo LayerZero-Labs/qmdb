@@ -19,7 +19,7 @@ cfg_if! {
 
         /// Number of concurrent jobs for normal operation.
         /// Balances throughput and resource usage.
-        const JOB_COUNT: usize = 4000;
+        const JOB_COUNT: usize = 40000;
 
         /// Number of concurrent jobs during warmup phase.
         /// Higher to accelerate initial data loading.
@@ -31,6 +31,23 @@ cfg_if! {
     } else {
         pub mod uniprefetcher;
         pub use uniprefetcher::{JobManager, Prefetcher};
+
+        /// Stub module so that `use crate::prefetcher::dioprefetcher::PruneCmd`
+        /// compiles unchanged in flusher and lib when `disable_dio` is active or
+        /// on non-Linux targets.  The channel is created and the cmd is sent by
+        /// the flusher, but the uniprefetcher simply ignores it.
+        pub mod dioprefetcher {
+            #[derive(Debug, Clone, Copy)]
+            pub struct PruneCmd {
+                pub shard_id: usize,
+                pub end_seg_id: usize,
+            }
+
+            /// No io_uring reads without the DIO prefetcher.
+            pub fn dio_read_count() -> u64 {
+                0
+            }
+        }
     }
 }
 
@@ -129,12 +146,14 @@ mod tests {
             done_receivers.push(done_receiver);
         }
 
+        let (_prune_tx, prune_rx) = bounded(1);
         let prefetcher = Prefetcher::new(
             task_hub,
             entry_cache.clone(),
             indexer_arc,
             Arc::new(pool),
             job_man,
+            prune_rx,
         );
 
         prefetcher.run_task(0x123000001);

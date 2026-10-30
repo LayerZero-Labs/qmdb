@@ -1,0 +1,52 @@
+[package]
+name = "benchtop"
+version = "0.1.0"
+authors = ["thrum"]
+homepage = "https://thrum.dev"
+repository = "https://github.com/thrumdev/nomt"
+edition = "2021"
+license = "MIT/Apache-2.0"
+
+[dependencies]
+
+# benchmarking
+clap = { version = "4.4.8", features = ["derive"] }
+anyhow = { version = "1.0.75" }
+hdrhistogram = "7.5.4"
+fxhash = "0.2.1"
+rand = "0.8.5"
+rand_distr = "0.4.3"
+sha2 = { version = "0.10.6" }
+ruint = { version = "1.12.1" }
+toml = "0.8.12"
+serde = "1.0.199"
+humantime = "2.1.0"
+rayon = "1.10"
+lru = "0.12.5"
+libc = "0.2.155"
+
+# sov-db
+sov-db = { git = "https://github.com/Sovereign-Labs/sovereign-sdk", optional = true }
+sov-schema-db = { git = "https://github.com/Sovereign-Labs/sovereign-sdk", optional = true }
+sov-prover-storage-manager = { git = "https://github.com/Sovereign-Labs/sovereign-sdk", optional = true }
+jmt = { git = "https://github.com/penumbra-zone/jmt.git", rev = "1d007e11cb68aa5ca13e9a5af4a12e6439d5f7b6", optional = true }
+
+# sp-trie
+sp-trie = { version = "32.0.0", optional = true }
+sp-state-machine = { version = "0.35.0", optional = true }
+trie-db = { version = "0.28.0", optional = true }
+hash-db = { version = "0.16.0", optional = true }
+sp-core = { version = "31.0.0", optional = true }
+kvdb = { version = "0.13.0", optional = true }
+kvdb-rocksdb = { version = "0.19.0", optional = true }
+array-bytes = { version = "6.1", optional = true }
+
+# nomt
+nomt = { path = "../nomt" }
+
+[profile.release]
+debug = true
+
+[features]
+sov-db=["dep:sov-db", "sov-schema-db", "sov-prover-storage-manager", "jmt" ]
+sp-trie=["dep:sp-trie", "sp-state-machine", "trie-db", "hash-db", "sp-core", "kvdb", "kvdb-rocksdb", "array-bytes" ]

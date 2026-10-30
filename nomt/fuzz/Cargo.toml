@@ -1,0 +1,60 @@
+[package]
+name = "nomt-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1.3.1", features = ["derive"] }
+tempfile.workspace = true
+bitvec.workspace = true
+
+[dependencies.nomt]
+path = "../nomt"
+features = ["fuzz"]
+
+[[bin]]
+name = "api_surface"
+path = "fuzz_targets/api_surface.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bitwise_memcpy"
+path = "fuzz_targets/bitwise_memcpy.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "separate"
+path = "fuzz_targets/separate.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "prefix_len"
+path = "fuzz_targets/prefix_len.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "separator_len"
+path = "fuzz_targets/separator_len.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "reconstruct_key"
+path = "fuzz_targets/reconstruct_key.rs"
+test = false
+doc = false
+bench = false

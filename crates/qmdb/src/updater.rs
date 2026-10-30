@@ -154,7 +154,6 @@ use qmdb_common::{
 };
 use smallvec::SmallVec;
 use std::sync::Arc;
-//use std::sync::atomic::{AtomicU64, Ordering};
 
 /// A type alias for the mutex guard used to protect the entry buffer writer.
 ///
@@ -367,7 +366,6 @@ impl Updater {
         F: Fn(&EntryBz) -> bool,
     {
         let pos_list = self.indexer.for_each_value(height, &key_hash[..]);
-        //println!("lookup_entry kh={} pos_list={:?}", hex::encode(key_hash), pos_list);
         lookup_entry_in_pos_list(
             pos_list.enumerate(),
             |pos, buf| self.read_entry(ebw, self.shard_id, pos, buf),
@@ -531,18 +529,16 @@ impl Updater {
     /// - Ensures ordered execution
     /// - Preserves referential integrity
     fn run_task(&mut self, ebw: &mut Guard, task_id: i64, end_block: bool) {
-        let task_hub = self.task_hub.as_ref();
         if is_first_task_in_block(task_id) {
             //task_index ==0 and new block start
             let height = split_task_id(task_id).0;
             self.curr_version = join_task_id(height, 0, false);
 
-            let cache = task_hub.get_entry_cache(height);
+            let cache = self.task_hub.get_entry_cache(height);
             self.cache = cache;
         }
-        for change_set in task_hub.get_change_sets(task_id).iter() {
+        for change_set in self.task_hub.get_change_sets(task_id).iter() {
             change_set.run_in_shard(self.shard_id, |op, key_hash, k, v, r| {
-                //println!("run_task op={} key_hash={} key={} value={}", op, hex::encode(key_hash), hex::encode(k), hex::encode(v));
                 self.compare_active_info(r);
                 match op {
                     OP_WRITE => self.write_kv(ebw, key_hash, k, v, r),
@@ -919,13 +915,6 @@ fn _compare_old_entry(rec: Option<&Box<OpRecord>>, entry_bz: &EntryBz) {
 fn _compare_prev_entry(rec: Option<&Box<OpRecord>>, entry_bz: &EntryBz) {
     if let Some(rec) = rec {
         let v = rec.rd_list.first().unwrap();
-        //if &v[..] != entry_bz.bz {
-        //    let e = EntryBz { bz: &v[..] };
-        //    println!("ref k={} v={}", hex::encode(e.key()), hex::encode(e.value()));
-        //    println!("ref sn={:#016x} ver={:#016x}", e.serial_number(), e.version());
-        //    println!("imp k={} v={}", hex::encode(entry_bz.key()), hex::encode(entry_bz.value()));
-        //    println!("imp sn={:#016x} ver={:#016x}", entry_bz.serial_number(), entry_bz.version());
-        //}
         assert_eq!(&v[..], entry_bz.bz, "compare_prev_entry failed");
     }
 }
@@ -1017,34 +1006,6 @@ fn _compare_put_entry(
             entry_equal(&v[..], entry, dsn_list),
             "compare_put_entry failed"
         );
-    }
-}
-
-/// Public wrapper for _compare_old_entry.
-fn compare_old_entry(rec: Option<&Box<OpRecord>>, entry_bz: &EntryBz) {
-    if cfg!(feature = "check_rec") {
-        _compare_old_entry(rec, entry_bz)
-    }
-}
-
-/// Public wrapper for _compare_prev_entry.
-fn compare_prev_entry(rec: Option<&Box<OpRecord>>, entry_bz: &EntryBz) {
-    if cfg!(feature = "check_rec") {
-        _compare_prev_entry(rec, entry_bz)
-    }
-}
-
-/// Public wrapper for _compare_prev_changed.
-fn compare_prev_changed(rec: Option<&Box<OpRecord>>, entry: &Entry, dsn_list: &[u64]) {
-    if cfg!(feature = "check_rec") {
-        _compare_prev_changed(rec, entry, dsn_list);
-    }
-}
-
-/// Public wrapper for _compare_new_entry.
-fn compare_new_entry(rec: Option<&Box<OpRecord>>, entry: &Entry, dsn_list: &[u64]) {
-    if cfg!(feature = "check_rec") {
-        _compare_new_entry(rec, entry, dsn_list);
     }
 }
 
@@ -1580,3 +1541,4 @@ mod compare_tests {
         _compare_put_entry(rec, &entry, &dsn_list, 1);
     }
 }
+

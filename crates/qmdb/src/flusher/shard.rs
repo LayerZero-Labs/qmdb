@@ -8,6 +8,7 @@ use qmdb_common::def::{
     LEAF_COUNT_IN_TWIG, MAX_PROOF_REQ, MIN_PRUNE_COUNT, PRUNE_EVERY_NBLOCKS, TWIG_SHIFT,
 };
 use std::sync::Arc;
+use crate::prefetcher::dioprefetcher::PruneCmd;
 
 use super::barrier_set::BarrierSet;
 
@@ -185,13 +186,13 @@ impl FlusherShard {
         meta: Arc<RwLock<RocksMetaDB>>,
         bar_set: Arc<BarrierSet>,
         end_block_chan: crossbeam::channel::Sender<Arc<MetaInfo>>,
+        prune_sender: crossbeam::channel::Sender<PruneCmd>,
     ) {
-        let buf_read = self.buf_read.as_mut().unwrap();
+        let mut buf_read = self.buf_read.take().unwrap();
         loop {
             let mut file_pos: i64 = 0;
             let (is_end_of_block, expected_file_pos) = buf_read.read_next_entry(|entry_bz| {
                 file_pos = self.tree.append_entry(&entry_bz).unwrap();
-                //println!("flush append_entry key={} kh={} sn={}", hex::encode(entry_bz.key()), hex::encode(entry_bz.key_hash()), entry_bz.serial_number());
                 for (_, dsn) in entry_bz.dsn_iter() {
                     self.tree.deactive_entry(dsn);
                 }
@@ -203,12 +204,13 @@ impl FlusherShard {
                 break;
             }
         }
+
         let (compact_done_pos, compact_done_sn, sn_end) = buf_read.read_extra_info();
-        //println!("HH flush shard{} curr_height={}", self.shard_id, curr_height);
 
         let mut start_twig_id: u64 = 0;
         let mut end_twig_id: u64 = 0;
         let mut ef_size: i64 = 0;
+
         if prune_to_height > 0 && prune_to_height % PRUNE_EVERY_NBLOCKS == 0 {
             let meta = meta.read_arc();
             (start_twig_id, _) = meta.get_last_pruned_twig(self.shard_id);
@@ -235,6 +237,16 @@ impl FlusherShard {
                 //
                 // If this assumption is violated (e.g., Prefetcher reads old data), io_uring reads
                 // may fail or return garbage due to closed/reused file descriptors.
+                // prune_twigs deletes every entry-file segment below ef_size. Tell the io_uring
+                // workers first, so they unregister those segments and the disk space is
+                // released now rather than when the process exits. try_send cannot fail on the
+                // unbounded channel used with the DIO prefetcher; without it nothing reads the
+                // bounded channel, so a dropped command does not matter.
+                let segment_size = self.tree.get_entry_file_segment_size();
+                let _ = prune_sender.try_send(PruneCmd {
+                    shard_id: self.shard_id,
+                    end_seg_id: (ef_size / segment_size) as usize,
+                });
                 self.tree.prune_twigs(start_twig_id, end_twig_id, ef_size);
             }
         }
@@ -294,11 +306,8 @@ impl FlusherShard {
             meta.set_curr_height(curr_height);
             let meta_info = meta.commit();
             drop(meta);
-            //println!("HH end_block commit shard{} curr_height={}", self.shard_id, curr_height);
             match end_block_chan.send(meta_info) {
-                Ok(_) => {
-                    //println!("{} end block", curr_height);
-                }
+                Ok(_) => {}
                 Err(_) => {
                     println!("end block sender exit!");
                 }
@@ -307,5 +316,7 @@ impl FlusherShard {
             drop(meta);
             bar_set.metadb_bar.wait();
         }
+        self.buf_read = Some(buf_read);
     }
 }
+

@@ -97,21 +97,15 @@ impl TestGenV2 {
 
     pub fn gen_block(&mut self) -> Vec<RwLock<Option<SimpleTask>>> {
         let blk_in_round = self.block_in_round();
-        // if self.block_count != 0 && self.block_count % blk_in_round == 0 {
         if self.block_count == blk_in_round {
             // First round is to populate the database, second round is to benchmark TPS.
             // Code does not currently support more than 2 rounds. TODO: Refactor this.
-            // println!(
-            //     "New round: {} -> {}, cur_num: {}, max_delete_num: {}, cur_delete_num: {}, cur_create_num: {}, cur_read_num: {}",
-            //     self.cur_round, self.cur_round+1, self.cur_num, self.max_delete_num, self.cur_delete_num, self.cur_create_num, self.cur_read_num
-            // );
             self.cur_round += 1;
             self.cur_num = 0;
             self.max_delete_num = self.cur_delete_num;
             self.cur_delete_num = 0;
             self.cur_read_num = 0;
         }
-        //println!("AA gen_block cur_round={} block_count={} sp={:?}", self.cur_round, self.block_count, self.sp);
         let mut res: Vec<RwLock<Option<SimpleTask>>> = Vec::with_capacity(self.task_in_block);
         for _ in 0..self.task_in_block {
             res.push(RwLock::new(None));
@@ -311,12 +305,12 @@ impl TestGenV2 {
     pub fn fill_kv(&self, num: u64, k: &mut [u8], v: &mut [u8]) -> [u8; 32] {
         BigEndian::write_u64(&mut k[12..20], num);
         let hash = qmdb_common::entryfile::entry::entry_key_hash(&k[12..20]);
-        k[20..20 + 32].copy_from_slice(&hash[..]);
         for i in 0..12 {
-            // fill zero bytes with pseudo-random values
-            k[i] = k[20 + i] ^ k[32 + i];
+            // pseudo-random bytes derived from hash of num.
+            // Equivalent to the old formula (k[20+i] ^ k[32+i]) since k[20..52] == hash.
+            k[i] = hash[i] ^ hash[12 + i];
         }
-        let kh = qmdb_common::entryfile::entry::entry_key_hash(&k[..]);
+        let kh = qmdb_common::entryfile::entry::entry_key_hash(&k[..20]);
 
         BigEndian::write_u32(&mut v[..4], self.cur_round as u32);
         v[4..].copy_from_slice(&kh[4..]);
@@ -337,7 +331,7 @@ impl TestGenV2 {
         // logical numbers used in this changeset. When generating read
         // operations, we resample until we find an unused logical number.
         let mut cset = ChangeSet::new();
-        let mut k = [0u8; 32 + 20];
+        let mut k = [0u8; 20];
         let mut v = [0u8; 32];
         let mut op_type = OP_WRITE;
         if self.cur_round == 0 {
@@ -361,8 +355,6 @@ impl TestGenV2 {
                 };
             }
             let kh = self.fill_kv(num, &mut k[..], &mut v[..]);
-            //let k64 = BigEndian::read_u64(&kh[0..8]);
-            //println!("AA blkcnt={:#04x} r={:#04x} op={} cur_num={:#08x} num={:#08x} k64={:#016x} k={:?} kh={:?}", self.block_count, self.cur_round, op_type, self.cur_num, num, k64, k, kh);
             self.cur_num += 1;
 
             cset.add_op(op_type, &kh, &k[..], &v[..], None);

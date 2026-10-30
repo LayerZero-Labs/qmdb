@@ -31,10 +31,6 @@ use tokio::sync::{mpsc, oneshot, RwLock};
 #[cfg(all(target_os = "linux", not(feature = "disable_dio")))]
 use super::EntryFile;
 
-// ============================================================================
-// Sender/Receiver for completion notification
-// ============================================================================
-
 /// Sender for completion notification - supports both async and sync receivers
 #[cfg(all(target_os = "linux", not(feature = "disable_dio")))]
 pub enum DoneSender {
@@ -92,10 +88,6 @@ impl DoneReceiver {
     }
 }
 
-// ============================================================================
-// Read request and in-flight tracking
-// ============================================================================
-
 /// Read request sent to the uring worker thread.
 #[cfg(all(target_os = "linux", not(feature = "disable_dio")))]
 pub struct UringReadRequest {
@@ -134,10 +126,6 @@ struct InFlightRequest {
     done_tx: DoneSender,
 }
 
-// ============================================================================
-// PoolGuard - automatic buffer recycling
-// ============================================================================
-
 /// PoolGuard automatically returns a buffer to the pool when dropped.
 #[cfg(all(target_os = "linux", not(feature = "disable_dio")))]
 pub struct PoolGuard {
@@ -168,10 +156,6 @@ impl Drop for PoolGuard {
         }
     }
 }
-
-// ============================================================================
-// MultiEntryFileUringReader
-// ============================================================================
 
 /// Handle to the io_uring reader for sending read requests.
 /// Supports reading from multiple EntryFiles indexed by shard_id.
@@ -647,10 +631,6 @@ impl MultiEntryFileUringReader {
     }
 }
 
-// ============================================================================
-// io_uring worker loop
-// ============================================================================
-
 /// Drains all pending requests from the channel and notifies callers with failure (0).
 /// This must be called before exiting the uring loop to avoid leaving callers blocked forever.
 #[cfg(all(target_os = "linux", not(feature = "disable_dio")))]
@@ -876,10 +856,6 @@ fn submit_request(
     });
     true
 }
-
-// ============================================================================
-// Tests
-// ============================================================================
 
 #[cfg(all(test, target_os = "linux", not(feature = "disable_dio")))]
 mod tests {

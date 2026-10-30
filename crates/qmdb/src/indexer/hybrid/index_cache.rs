@@ -110,13 +110,11 @@ impl IndexCacheMap {
             }
         }
         if old_height > 0 {
-            //println!("A5 now remove height={}", old_height);
             self.m.remove(&old_height);
         }
         // insert a new cache
         let mut cache = IndexCache::default();
         cache.add(k, prev_k, list);
-        //println!("A6 now add height={}", height);
         self.m.insert(height, cache);
     }
 
@@ -209,18 +207,9 @@ impl IndexCache {
 
     pub fn lookup_with_prev(&mut self, warmup: bool, k: u64) -> Option<(u64, ShortList)> {
         if let Some((prev_k, list)) = self.with_prev.get(&k) {
-            //if k%0x10000==0x9d0a {
-            //    println!("A2 wi hit warmup={} k={:#016x}", warmup, k);
-            //}
             COUNTERS.incr_hit_wi(warmup);
             Some((*prev_k, list.clone())) //cache-hit
         } else {
-            //if k%0x10000==0x9d0a {
-            //    println!("A2 wi miss warmup={} k={:#016x}", warmup, k);
-            //}
-            //if !warmup {
-            //    println!("CC k={:#016x}", k);
-            //}
             COUNTERS.incr_miss_wi(warmup);
             None //cache-miss
         }

@@ -1,0 +1,71 @@
+name: Build and Test
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  nomt_test:
+    name: NOMT - test
+    runs-on: ubuntu-latest
+    env:
+      # Avoid shrinking the inputs when an error is found in the leaf/branch stage tests.
+      NO_STAGES_SHRINKING: true
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/install-fuse
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --verbose --workspace --locked
+      - run: cargo test --verbose --workspace
+  benchtop_check:
+    name: NOMT - check benchtop
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/install-fuse
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo check --verbose --manifest-path=benchtop/Cargo.toml --locked
+  loom_rw_pass_cell:
+    name: NOMT - loom rw_pass_cell
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - run: RUSTFLAGS="--cfg loom" cargo test -p nomt --release --lib rw_pass_cell
+  doc:
+    name: NOMT - doc
+    runs-on: ubuntu-latest
+    env:
+      # Treat rustdoc warnings as errors.
+      RUSTDOCFLAGS: "-D warnings"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/install-fuse
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo doc --verbose --workspace --document-private-items
+  fmt:
+    name: NOMT - fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo fmt --all --check
+      - run: cargo fmt --manifest-path=benchtop/Cargo.toml --check
+  darwin_check:
+    name: NOMT - check darwin target
+    runs-on: ubuntu-latest
+    env:
+      # This is a workaround for the blake3 crate.
+      CARGO_FEATURE_PURE: 1
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+      # Build only the NOMT crate. Not everything builds cleanly under this configuration.
+      - run: cargo check --verbose -p nomt --locked --target x86_64-apple-darwin

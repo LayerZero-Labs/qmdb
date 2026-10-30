@@ -16,7 +16,6 @@
 
 pub mod check;
 pub mod helpers;
-//pub mod proof;
 pub mod multiproof;
 pub mod recover;
 pub mod singleproof;

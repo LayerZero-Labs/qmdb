@@ -8,7 +8,7 @@ use crate::test_helper::SimpleTask;
 use parking_lot::RwLock;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::ops::Bound::{self, Included};
 use std::sync::Arc;
 
@@ -217,7 +217,6 @@ impl TestGenV0 {
 
     pub fn gen_blocks(&mut self, epoch_id: usize, blocks: &mut Vec<Block>) {
         blocks.clear();
-        println!("Why blocks_in_epoch: {}", self.blocks_in_epoch);
         for i in 0..self.blocks_in_epoch {
             let height = self.height;
             println!("block#{}", height);
@@ -256,31 +255,25 @@ impl TestGenV0 {
         };
         self.height += 1;
         for i in 0..blk_size {
-            //println!("tx#{}", i);
             let count = rand_between(&mut self.randsrc, 1, self.max_cset_in_task);
             let mut task = Vec::with_capacity(count);
             for j in 0..count {
-                //println!("changeset#{}", j);
                 let drop = rand_between(&mut self.randsrc, 0, 100);
                 if drop < self.drop_prob {
                     task.push(vec![]); // a dropped tx
                 } else {
                     task.push(self.gen_cset());
                 }
-                //println!("changeset#{} done", j);
             }
             blk.tasks.push(task);
-            //println!("tx#{} done", i);
         }
         if self.height > 10 {
             for i in 0..reads {
                 blk.read_list.push(self.gen_read());
             }
-            //println!("read_list@blk#{} done", self.height);
             for _ in 0..misses {
                 blk.miss_list.push((self.gen_miss(), 0));
             }
-            //println!("miss_list@blk#{} done", self.height);
         }
         blk
     }
@@ -295,7 +288,6 @@ impl TestGenV0 {
         let mut cset = Vec::with_capacity(cset_size);
         for _ in 0..cset_size {
             cset.push(self.gen_op(&mut keys));
-            //println!("gen_op done");
         }
         cset
     }
@@ -357,10 +349,9 @@ impl TestGenV0 {
     pub fn gen_write(&mut self, keys: &mut HashSet<u32>) -> Op {
         loop {
             let (k, v) = self.get_rand_kv_with_recent(keys);
-            let value = v ^ self.randsrc.get_uint32(); // & 0xFF;
+            let value = v ^ self.randsrc.get_uint32();
             self.tree.insert(k, value);
             self.curr_wr_set.insert(k);
-            //println!("WR k={} v={}", k, v);
             return Op {
                 key: k,
                 value,
@@ -375,7 +366,6 @@ impl TestGenV0 {
             let (k, v) = self.get_rand_kv_with_recent(keys);
             self.tree.remove(&k);
             self.curr_del_set.insert(k);
-            //println!("DEL k={}", k);
             return Op {
                 key: k,
                 value: 0,
@@ -392,10 +382,9 @@ impl TestGenV0 {
                 continue;
             }
             keys.insert(k);
-            let value = self.randsrc.get_uint32(); // & 0xFF;
+            let value = self.randsrc.get_uint32();
             self.tree.insert(k, value);
             self.curr_add_set.insert(k);
-            //println!("ADD k={} v={}", k, value);
             return Op {
                 key: k,
                 value,
@@ -452,13 +441,10 @@ impl TestGenV0 {
         let mut n = self.randsrc.get_uint64() as usize;
         n %= wr_prob + del_prob + add_prob;
         if n < wr_prob {
-            //println!("gen_write");
             self.gen_write(keys)
         } else if n < wr_prob + del_prob {
-            //println!("gen_del");
             self.gen_del(keys)
         } else {
-            //println!("gen_add");
             self.gen_add(keys)
         }
     }

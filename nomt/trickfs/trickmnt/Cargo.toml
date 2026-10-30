@@ -1,0 +1,15 @@
+[package]
+name = "trickmnt"
+version = "0.1.0"
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+trickfs = { path = ".." }
+clap = { version = "4.3.5", features = ["derive"] }
+env_logger = "0.11.6"
+log = "0.4.22"
+anyhow = "1.0.95"

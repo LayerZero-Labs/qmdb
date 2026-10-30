@@ -44,6 +44,17 @@ pub type BigBuf = [u8];
 /// # Returns
 /// A boxed slice initialized with zeros
 pub fn new_big_buf_boxed() -> Box<[u8]> {
+    // If QMDB_BIGBUF_MEMSET is set, zero the buffer with memset instead of a zeroed
+    // allocation (calloc): jemalloc zeroes recycled extents for calloc with
+    // madvise(MADV_DONTNEED), whose TLB-shootdown IPIs stall the other threads.
+    // black_box keeps the compiler from fusing the allocation and memset into calloc.
+    extern crate std;
+    static MEMSET: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *MEMSET.get_or_init(|| std::env::var("QMDB_BIGBUF_MEMSET").is_ok()) {
+        let mut v: Vec<u8> = std::hint::black_box(Vec::with_capacity(BIG_BUF_SIZE));
+        v.resize(BIG_BUF_SIZE, 0);
+        return v.into_boxed_slice();
+    }
     vec![0u8; BIG_BUF_SIZE].into_boxed_slice()
 }
 
@@ -174,3 +185,4 @@ mod tests {
         assert_eq!(encode_le_u64(0x8877665544332211), v);
     }
 }
+

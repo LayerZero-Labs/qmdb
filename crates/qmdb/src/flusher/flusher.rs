@@ -82,6 +82,7 @@
 //! let curr_height = 1i64;
 //! let max_height = 100i64;
 //! let (end_block_sender, end_block_chan) = unbounded();
+//! let (prune_sender, _prune_receiver) = unbounded();
 //!
 //! // Create a single flusher shard (for demonstration)
 //! let shard = FlusherShard::new(
@@ -98,6 +99,7 @@
 //!     curr_height,         // Current block height
 //!     max_height,          // Maximum blocks to keep
 //!     end_block_sender,    // Block completion channel
+//!     prune_sender,        // Pruned-segment notifications for the prefetcher
 //! );
 //!
 //! // Start flushing
@@ -124,6 +126,7 @@ use parking_lot::RwLock;
 use qmdb_common::def::SHARD_COUNT;
 use std::sync::Arc;
 use std::thread;
+use crate::prefetcher::dioprefetcher::PruneCmd;
 
 use super::barrier_set::BarrierSet;
 use super::shard::{FlusherShard, ProofReqElem};
@@ -189,6 +192,8 @@ pub struct Flusher {
     max_kept_height: i64,
     /// Channel for signaling block completion
     end_block_chan: crossbeam::channel::Sender<Arc<MetaInfo>>,
+    /// Sender of the channel that notifies the prefetchers of pruned segments
+    prune_sender: crossbeam::channel::Sender<PruneCmd>,
 }
 
 impl Flusher {
@@ -216,6 +221,8 @@ impl Flusher {
         curr_height: i64,
         max_kept_height: i64,
         end_block_chan: crossbeam::channel::Sender<Arc<MetaInfo>>,
+        // the sender is passed in at construction
+        prune_sender: crossbeam::channel::Sender<PruneCmd>,
     ) -> Self {
         Self {
             shards,
@@ -223,6 +230,7 @@ impl Flusher {
             curr_height,
             max_kept_height,
             end_block_chan,
+            prune_sender,
         }
     }
 
@@ -282,14 +290,14 @@ impl Flusher {
             let prune_to_height = self.curr_height - self.max_kept_height;
             let bar_set = Arc::new(BarrierSet::new(shard_count));
             thread::scope(|s| {
-                // let curr_height = self.curr_height;
                 for shard in self.shards.iter_mut() {
                     let bar_set = bar_set.clone();
                     let curr_height = self.curr_height;
                     let meta = self.meta.clone();
                     let end_block_chan = self.end_block_chan.clone();
+                    let prune_sender = self.prune_sender.clone();
                     s.spawn(move || {
-                        shard.flush(prune_to_height, curr_height, meta, bar_set, end_block_chan);
+                        shard.flush(prune_to_height, curr_height, meta, bar_set, end_block_chan, prune_sender);
                     });
                 }
             });
@@ -377,6 +385,7 @@ mod flusher_tests {
             curr_height: 0,
             max_kept_height: 1000,
             end_block_chan: eb_sender,
+            prune_sender: bounded(1).0,
         };
 
         let shard_id = 0;
@@ -472,3 +481,4 @@ mod flusher_tests {
         assert!(verify_single_proof(&sp));
     }
 }
+

@@ -1,0 +1,17 @@
+name: Install Ubuntu Dependencies
+description: "Installs dependencies on Ubuntu"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Update apt-get
+      shell: bash
+      run: sudo apt-get update
+
+    - name: Install FUSE libraries
+      shell: bash
+      run: sudo apt-get install -y libfuse3-dev libfuse-dev
+
+    - name: Allow non-root users to mount FUSE filesystems
+      shell: bash
+      run: echo "user_allow_other" | sudo tee -a /etc/fuse.conf

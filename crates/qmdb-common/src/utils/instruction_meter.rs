@@ -1,6 +1,4 @@
-// ============================================================================
 // When `instruction_meter` feature is enabled, use full implementation
-// ============================================================================
 #[cfg(feature = "instruction_meter")]
 mod enabled {
     extern crate std;
@@ -121,9 +119,7 @@ mod enabled {
     }
 }
 
-// ============================================================================
 // When `instruction_meter` feature is disabled, use no-op implementation (zero overhead)
-// ============================================================================
 #[cfg(not(feature = "instruction_meter"))]
 mod disabled {
     use alloc::string::String;

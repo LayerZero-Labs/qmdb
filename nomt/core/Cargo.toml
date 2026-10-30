@@ -1,0 +1,33 @@
+[package]
+name = "nomt-core"
+description = "Core trie operations for NOMT"
+version = "1.0.3"
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bitvec.workspace = true
+hex.workspace = true
+ruint.workspace = true
+arrayvec.workspace = true
+borsh = { workspace = true, optional = true }
+blake3 = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+digest = { workspace = true }
+
+[dev-dependencies]
+blake3.workspace = true
+
+[features]
+default = ["std", "blake3-hasher", "sha2-hasher"]
+std = ["bitvec/std", "borsh?/std", "serde?/std"]
+borsh = ["dep:borsh"]
+blake3-hasher = ["dep:blake3"]
+sha2-hasher = ["dep:sha2"]
+serde = ["dep:serde", "serde/alloc"]
